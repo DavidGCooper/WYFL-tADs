@@ -1,0 +1,528 @@
+---
+title: "D10-Analysis"
+author: "David Cooper"
+date: "2023-03-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(pheatmap)
+library(limma)
+library(Biobase)
+library(MASS)
+library(caret)
+library(pROC)
+library(stringr)
+library(gridExtra)
+library(ggseqlogo)
+library(RColorBrewer)
+library(scales)
+source("ProcessingFunctions.R")
+
+```
+
+## ML AD prediction models
+
+How well do PADDLE and the Mechanistic Predictor predict the function of ADs tested in vivo?
+
+```{r Load and Prep Data}
+FilteredEset=readRDS("STARFilteredNormalizedEset.rds")
+AllSeqPADDLE=read.table("UniqueSeqPADDLEOUT.txt",col.names = c("Sequence","PADDLE"))
+
+#Controls
+ControlsEset=FilteredEset[substr(FilteredEset@featureData@data$set,1,7)=="natural",]
+ControlsDF=as.data.frame(ControlsEset@featureData@data)
+ControlsDF$PADDLE=AllSeqPADDLE$PADDLE[match(ControlsDF$aa_seq,AllSeqPADDLE$Sequence)]
+
+#D10
+#Individual D10 fData Tables
+#WD10
+WD10fdata=FilteredEset[FilteredEset@featureData@data$set=="WD10"]@featureData@data%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2)
+WD10fdata$PADDLE=AllSeqPADDLE$PADDLE[match(WD10fdata$aa_seq,AllSeqPADDLE$Sequence)]
+WD10fdata$Group="WD10"
+#FD10
+FD10fdata=FilteredEset[FilteredEset@featureData@data$set=="FD10"]@featureData@data%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2)
+FD10fdata$PADDLE=AllSeqPADDLE$PADDLE[match(FD10fdata$aa_seq,AllSeqPADDLE$Sequence)]
+FD10fdata$Group="FD10"
+#LD10
+LD10fdata=FilteredEset[FilteredEset@featureData@data$set=="LD10"]@featureData@data%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2)
+LD10fdata$PADDLE=AllSeqPADDLE$PADDLE[match(LD10fdata$aa_seq,AllSeqPADDLE$Sequence)]
+LD10fdata$Group="LD10"
+#YD10
+YD10fdata=FilteredEset[FilteredEset@featureData@data$set=="YD10"]@featureData@data%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2)
+YD10fdata$PADDLE=AllSeqPADDLE$PADDLE[match(YD10fdata$aa_seq,AllSeqPADDLE$Sequence)]
+YD10fdata$Group="YD10"
+#All D10 Sequences
+D10fdata=bind_rows(WD10fdata,FD10fdata,LD10fdata,YD10fdata)
+
+#WYFL
+#Add extra sequence field for controls where it is missing
+FilteredEset@featureData@data[FilteredEset@featureData@data$id_number %in% c(seq(194,215,3),2501),]$extra="WWWWW"
+FilteredEset@featureData@data[FilteredEset@featureData@data$id_number %in% c(3958,3524),]$extra="FFFFF"
+FilteredEset@featureData@data[FilteredEset@featureData@data$id_number %in% c(4981,4547),]$extra="LLLLL"
+FilteredEset@featureData@data[FilteredEset@featureData@data$id_number %in% c(6004,5570),]$extra="YYYYY"
+#All WYFL Sequences
+WYFLEset=FilteredEset[FilteredEset@featureData@data$set=="mixing_WYFL_collapsed"|
+                      FilteredEset@featureData@data$set=="mixing_WYFL_extended"|
+                      FilteredEset@featureData@data$set=="mixing_WYFL_wd5"|
+                      FilteredEset@featureData@data$id_number %in% c(seq(194,215,3),3958,4981,6004,2501,3524,4547,5570),]
+#Extended (Flanked)
+WYFLexfdata=WYFLEset[WYFLEset@featureData@data$set=="mixing_WYFL_extended"|WYFLEset@featureData@data$id_number %in% c(seq(194,215,3),3958,4981,6004),]@featureData@data%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+WYFLexfdata$Group=rep("ex",nrow(WYFLexfdata))
+WYFLexfdata$PADDLE=AllSeqPADDLE$PADDLE[match(WYFLexfdata$aa_seq,AllSeqPADDLE$Sequence)]
+#Collapsed (Intermixed)
+WYFLcolfdata=WYFLEset[WYFLEset@featureData@data$set=="mixing_WYFL_collapsed"|WYFLEset@featureData@data$id_number %in% c(2501,3524,4547,5570),]@featureData@data%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+WYFLcolfdata$Group=rep("col",nrow(WYFLcolfdata))
+WYFLcolfdata$PADDLE=AllSeqPADDLE$PADDLE[match(WYFLcolfdata$aa_seq,AllSeqPADDLE$Sequence)]
+#wd5 (Amphipathic Helix)
+WYFLwd5fdata=WYFLEset[WYFLEset@featureData@data$set=="mixing_WYFL_wd5",]@featureData@data%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+WYFLwd5fdata$Group=rep("wd5",nrow(WYFLwd5fdata))
+WYFLwd5fdata$PADDLE=AllSeqPADDLE$PADDLE[match(WYFLwd5fdata$aa_seq,AllSeqPADDLE$Sequence)]
+#All WYFL Sequences
+WYFLCounts=bind_rows(WYFLexfdata,WYFLcolfdata,WYFLwd5fdata)
+
+#Dipeptides
+DipepEset=FilteredEset[FilteredEset@featureData@data$set=="dipeptide_combinations",]
+fData(DipepEset)$extra=factor(DipepEset@featureData@data$extra,levels = c("rep4","rep6","rep8","rep10"))
+Dipepfdata=DipepEset@featureData@data
+Dipepfdata$PADDLE=AllSeqPADDLE$PADDLE[match(Dipepfdata$aa_seq,AllSeqPADDLE$Sequence)]
+
+#Mechanistic Predictor
+LibFdata=FilteredEset@featureData@data
+LibFdata$WFLcount=str_count(LibFdata$aa_seq,"[WFL]")
+LibFdata$NetCharge=(str_count(LibFdata$aa_seq,"[RKH]")-str_count(LibFdata$aa_seq,"[DE]"))
+LibFdata$Mech=LibFdata$WFLcount>=3&LibFdata$NetCharge>=-6.5&LibFdata$NetCharge<=-4
+LibFdata$SetMech=paste(LibFdata$set,LibFdata$Mech,sep = "_")
+SpecificSets=filter(LibFdata,set=="WD10"|set=="LD10"|set=="FD10"|set=="YD10"|
+                             set=="mixing_WYFL_extended"|set=="mixing_WYFL_wd5"|set=="mixing_WYFL_collapsed")
+
+```
+
+## Controls PADDLE 
+
+```{r Controls PADDLE}
+table(ControlsDF$SlopeNorm2ptSD2>0,ControlsDF$PADDLE>=4)
+slopePADDLEgroups=c(14,53,82,43)
+slopePADDLEpercent=paste(round(slopePADDLEgroups/sum(slopePADDLEgroups)*100,1),"%",sep = "")
+
+ggplot(ControlsDF)+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 4,color="red",linewidth=1.2)+
+  geom_point(aes(x=PADDLE,y=SlopeNorm2ptSD2,color=extra),size=1.5)+
+  theme_classic()+
+  xlab("PADDLE Z-score")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  scale_x_continuous(breaks = seq(1,9,1),limits = c(1,9))+
+  #scale_color_manual(values = c("darkred","navy","darkgoldenrod2"),limits=c("ex","col","wd5"),breaks=c("ex","col","wd5"),name="Sequence",labels=c("Flanked","Intermixed","Amphipathic"))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold"),legend.text = element_text(size=12,face = "bold",color="black"),legend.title = element_text(size=14,face="bold"),legend.position = "right")+
+  geom_text(aes(x=3.2,y=7,label=slopePADDLEpercent[1]),size=5)+
+  geom_text(aes(x=4.8,y=7,label=slopePADDLEpercent[2]),size=5)+
+  geom_text(aes(x=3.2,y=-3,label=slopePADDLEpercent[3]),size=5)+
+  geom_text(aes(x=4.8,y=-3,label=slopePADDLEpercent[4]),size=5)
+
+```
+
+## D10 PADDLE
+
+```{r D10 PADDLE}
+table(D10fdata$SlopeNorm2ptSD2>0,D10fdata$PADDLE>=4)
+slopePADDLEgroups=c(26,920,1764,1354)
+slopePADDLEpercent=paste(round(slopePADDLEgroups/sum(slopePADDLEgroups)*100,1),"%",sep = "")
+
+#Combined
+ggplot(D10fdata)+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 4,color="red",linewidth=1.2)+
+  geom_point(aes(x=PADDLE,y=SlopeNorm2ptSD2,color=Group),size=1.5)+
+  theme_classic()+
+  xlab("PADDLE Z-score")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  scale_x_continuous(breaks = seq(-1,9,1),limits = c(-1,9))+
+  scale_color_manual(values = c("orange2","#f7cb77","yellow2","#cf8902"),limits=c("WD10","FD10","LD10","YD10"),breaks=c("WD10","FD10","LD10","YD10"),name="Sequence",labels=c("WD10","FD10","LD10","YD10"))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold"),legend.text = element_text(size=12,face = "bold",color="black"),legend.title = element_text(size=14,face="bold"),legend.position = c(0.15,0.8))+
+  geom_text(aes(x=3.2,y=7,label=slopePADDLEpercent[1]),size=5)+
+  geom_text(aes(x=4.8,y=7,label=slopePADDLEpercent[2]),size=5)+
+  geom_text(aes(x=3.2,y=-3,label=slopePADDLEpercent[3]),size=5)+
+  geom_text(aes(x=4.8,y=-3,label=slopePADDLEpercent[4]),size=5)
+
+#Correlations
+cor(WD10fdata$SlopeNorm2ptSD2,WD10fdata$PADDLE,method = "spearman")
+cor(FD10fdata$SlopeNorm2ptSD2,FD10fdata$PADDLE,method = "spearman")
+cor(LD10fdata$SlopeNorm2ptSD2,LD10fdata$PADDLE,method = "spearman")
+cor(YD10fdata$SlopeNorm2ptSD2,YD10fdata$PADDLE,method = "spearman")
+
+#WD10
+ggplot(filter(D10fdata,Group=="WD10"),aes(x=PADDLE,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 4,color="red",linewidth=1.2)+
+  geom_point(color="orange2",size=1.5)+
+  theme_classic()+
+  xlab("PADDLE Z-score")+
+  ylab("Slope")+
+  #labs(title = "WD10")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  scale_x_continuous(breaks = seq(-1,9,1),limits = c(-1,9))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"))+
+  geom_text(aes(x=-0.5,y=7,label="WD10",hjust="left"),size=6)+
+  geom_text(aes(x=-0.5,y=5.5,label="0.706",hjust="left"),size=6)
+
+#FD10
+ggplot(filter(D10fdata,Group=="FD10"),aes(x=PADDLE,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 4,color="red",linewidth=1.2)+
+  geom_point(color="#f7cb77",size=1.5)+
+  theme_classic()+
+  xlab("PADDLE Z-score")+
+  ylab("Slope")+
+  #labs(title = "FD10")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  scale_x_continuous(breaks = seq(-1,9,1),limits = c(-1,9))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"))+
+  geom_text(aes(x=-0.5,y=7,label="FD10",hjust="left"),size=6)+
+  geom_text(aes(x=-0.5,y=5.5,label="0.674",hjust="left"),size=6)
+
+#LD10
+ggplot(filter(D10fdata,Group=="LD10"),aes(x=PADDLE,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 4,color="red",linewidth=1.2)+
+  geom_point(color="yellow2",size=1.5)+
+  theme_classic()+
+  xlab("PADDLE Z-score")+
+  ylab("Slope")+
+  #labs(title = "LD10")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  scale_x_continuous(breaks = seq(-1,9,1),limits = c(-1,9))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"))+
+  geom_text(aes(x=-0.5,y=7,label="LD10",hjust="left"),size=6)+
+  geom_text(aes(x=-0.5,y=5.5,label="0.394",hjust="left"),size=6)
+
+#YD10
+ggplot(filter(D10fdata,Group=="YD10"),aes(x=PADDLE,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 4,color="red",linewidth=1.2)+
+  geom_point(color="#cf8902",size=1.5)+
+  theme_classic()+
+  xlab("PADDLE Z-score")+
+  ylab("Slope")+
+  #labs(title = "YD10")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  scale_x_continuous(breaks = seq(-1,9,1),limits = c(-1,9))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"))+
+  geom_text(aes(x=-0.5,y=7,label="YD10",hjust="left"),size=6)+
+  geom_text(aes(x=-0.5,y=5.5,label="-0.208",hjust="left"),size=6)
+
+```
+
+## WYFL PADDLE
+
+```{r WYFL PADDLE}
+table(WYFLCounts$SlopeNorm2ptSD2>0,WYFLCounts$PADDLE>=4)
+slopePADDLEgroups=c(15,1228,651,1184)
+slopePADDLEpercent=paste(round(slopePADDLEgroups/sum(slopePADDLEgroups)*100,1),"%",sep = "")
+
+#Combined
+ggplot(WYFLCounts)+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 4,color="red",linewidth=1.2)+
+  geom_point(aes(x=PADDLE,y=SlopeNorm2ptSD2,color=Group),size=1.5)+
+  theme_classic()+
+  xlab("PADDLE Z-score")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  scale_x_continuous(breaks = seq(1,9,1),limits = c(1,9))+
+  scale_color_manual(values = c("darkred","navy","darkgoldenrod2"),limits=c("ex","col","wd5"),breaks=c("ex","col","wd5"),name="Sequence",labels=c("Flanked","Intermixed","Amphipathic"))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold"),legend.text = element_text(size=12,face = "bold",color="black"),legend.title = element_text(size=14,face="bold"),legend.position = c(0.15,0.8))+
+  geom_text(aes(x=3.2,y=7,label=slopePADDLEpercent[1]),size=5)+
+  geom_text(aes(x=4.8,y=7,label=slopePADDLEpercent[2]),size=5)+
+  geom_text(aes(x=3.2,y=-3,label=slopePADDLEpercent[3]),size=5)+
+  geom_text(aes(x=4.8,y=-3,label=slopePADDLEpercent[4]),size=5)
+
+#Correlations
+cor(WYFLexfdata$SlopeNorm2ptSD2,WYFLexfdata$PADDLE,method = "spearman")
+cor(WYFLcolfdata$SlopeNorm2ptSD2,WYFLcolfdata$PADDLE,method = "spearman")
+cor(WYFLwd5fdata$SlopeNorm2ptSD2,WYFLwd5fdata$PADDLE,method = "spearman")
+
+#Flanked
+ggplot(filter(WYFLCounts,Group=="ex"),aes(x=PADDLE,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 4,color="red",linewidth=1.2)+
+  geom_point(color="darkred",size=1.5)+
+  theme_classic()+
+  xlab("PADDLE Z-score")+
+  ylab("Slope")+
+  #labs(title = "Flanked")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  scale_x_continuous(breaks = seq(-1,9,1),limits = c(-1,9))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"))+
+  geom_text(aes(x=-0.5,y=7,label="Flanked",hjust="left"),size=6)+
+  geom_text(aes(x=-0.5,y=5.5,label="WYFL",hjust="left"),size=6)+
+  geom_text(aes(x=-0.5,y=4,label="0.707",hjust="left"),size=6)
+
+#Intermixed
+ggplot(filter(WYFLCounts,Group=="col"),aes(x=PADDLE,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 4,color="red",linewidth=1.2)+
+  geom_point(color="navy",size=1.5)+
+  theme_classic()+
+  xlab("PADDLE Z-score")+
+  ylab("Slope")+
+  #labs(title = "Intermixed")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  scale_x_continuous(breaks = seq(-1,9,1),limits = c(-1,9))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"))+
+  geom_text(aes(x=-0.5,y=7,label="Intermixed",hjust="left"),size=6)+
+  geom_text(aes(x=-0.5,y=5.5,label="WYFL",hjust="left"),size=6)+
+  geom_text(aes(x=-0.5,y=4,label="0.763",hjust="left"),size=6)
+
+#Amphipathic Helix
+ggplot(filter(WYFLCounts,Group=="wd5"),aes(x=PADDLE,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  #geom_vline(xintercept = 4,color="red",linewidth=1.2)+
+  geom_point(color="darkgoldenrod2",size=1.5)+
+  theme_classic()+
+  xlab("PADDLE Z-score")+
+  ylab("Slope")+
+  #labs(title = "Amphipathic")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  scale_x_continuous(breaks = seq(-1,9,1),limits = c(-1,9))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"))+
+  geom_segment(aes(x=4,y=-Inf,xend=4,yend=5.5),color="red",linewidth=1.2)+
+  geom_text(aes(x=-0.5,y=7,label="Amphipathic",hjust="left"),size=6)+
+  geom_text(aes(x=-0.5,y=5.5,label="WYFL",hjust="left"),size=6)+
+  geom_text(aes(x=-0.5,y=4,label="0.843",hjust="left"),size=6)
+
+```
+
+## Dipeptides PADDLE
+
+```{r Dipeptides PADDLE}
+table(Dipepfdata$SlopeNorm2ptSD2>0,Dipepfdata$PADDLE>=4)
+slopePADDLEgroups=c(76,16,1291,38)
+slopePADDLEpercent=paste(round(slopePADDLEgroups/sum(slopePADDLEgroups)*100,1),"%",sep = "")
+
+ggplot(Dipepfdata)+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 4,color="red",linewidth=1.2)+
+  geom_point(aes(x=PADDLE,y=SlopeNorm2ptSD2,fill=extra),size=2,shape=21,color="black")+
+  theme_classic()+
+  xlab("PADDLE Z-score")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  scale_x_continuous(breaks = seq(-1,9,1),limits = c(-1,9))+
+  scale_fill_brewer(limits=c("rep4","rep6","rep8","rep10"),breaks=c("rep4","rep6","rep8","rep10"),name="Repeats",labels=c("4","6","8","10"))+
+  #scale_color_manual(values = c("darkred","navy","darkgoldenrod2"),limits=c("ex","col","wd5"),breaks=c("ex","col","wd5"),name="Sequence",labels=c("Flanked","Intermixed","Amphipathic"))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold"),legend.text = element_text(size=12,face = "bold",color="black"),legend.title = element_text(size=14,face="bold"),legend.position = c(0.15,0.8))+
+  geom_text(aes(x=3.2,y=7,label=slopePADDLEpercent[1]),size=5)+
+  geom_text(aes(x=4.8,y=7,label=slopePADDLEpercent[2]),size=5)+
+  geom_text(aes(x=3.2,y=-3,label=slopePADDLEpercent[3]),size=5)+
+  geom_text(aes(x=4.8,y=-3,label=slopePADDLEpercent[4]),size=5)
+
+```
+
+## Mechanistic Predictor
+
+Original Mechanistic Predictor:
+NetCharge >= -13 & NetCharge <=-8 & WFLcount >=6
+Modified Mechanistic Predictor:
+NetCharge >= -6.5 & NetCharge <=-4 & WFLcount >=3
+
+```{r Mechanistic Predictor}
+#Mechanistic Predictor Bin
+ggplot(SpecificSets)+
+  geom_jitter(aes(x=NetCharge,y=WFLcount,color=SlopeNorm2ptSD2),alpha=0.5,width = 0.3,height = 0.3,size=1)+
+  theme_classic()+
+  scale_color_viridis_c(option = "magma",name="Slope")+
+  geom_segment(aes(x=-13.5,xend=-7.5,y=5.5,yend=5.5),color="yellow2",linewidth=1)+
+  geom_segment(aes(x=-13.5,xend=-13.5,y=5.5,yend=21),color="yellow2",linewidth=1)+
+  geom_segment(aes(x=-7.5,xend=-7.5,y=5.5,yend=21),color="yellow2",linewidth=1)+
+  geom_segment(aes(x=-7,xend=-3.5,y=2.5,yend=2.5),color="orange",linewidth=1)+
+  geom_segment(aes(x=-7,xend=-7,y=2.5,yend=21),color="orange",linewidth=1)+
+  geom_segment(aes(x=-3.5,xend=-3.5,y=2.5,yend=21),color="orange",linewidth=1)+
+  ylab("Number of W, F, L")+
+  xlab("Net Charge")+
+  theme(panel.background = element_rect(fill = "black", colour="black"),
+        axis.text = element_text(size=14,color="black"),
+        axis.title = element_text(size=16,color="black"),
+        legend.text = element_text(size=14,color="black"),
+        legend.title = element_text(size=16,color="black"),
+        legend.position = c(0.9, 0.8))
+
+#All sequences
+table(LibFdata$Mech,LibFdata$SlopeNorm2ptSD2>0)
+ggplot(LibFdata)+
+  geom_violin(aes(x=as.factor(Mech),y=SlopeNorm2ptSD2),scale = "count",linewidth=1.2,fill="black")+
+  geom_hline(yintercept = 0, color="red",linewidth=1.2)+
+  theme_classic()+
+  geom_text(aes(x=0.7,y=-3,label=round((5969/11956)*100,2)),size=6)+
+  geom_text(aes(x=0.7,y=5,label=round((408/11956)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=-3,label=round((3048/11956)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=5,label=round((2531/11956)*100,2)),size=6)+
+  xlab("Mechanistic Prediction")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+  
+  scale_x_discrete(limits=c("FALSE","TRUE"),labels=c("Non-functional","Functional"))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")
+
+#Flanked
+table(LibFdata[LibFdata$set=="mixing_WYFL_extended",]$Mech,LibFdata[LibFdata$set=="mixing_WYFL_extended",]$SlopeNorm2ptSD2>0)
+ggplot(LibFdata[LibFdata$set=="mixing_WYFL_extended",])+
+  geom_violin(aes(x=as.factor(Mech),y=SlopeNorm2ptSD2),scale = "count",linewidth=1.2,fill="darkred")+
+  geom_hline(yintercept = 0, color="red")+
+  theme_classic()+
+  geom_text(aes(x=0.7,y=-3,label=round((104/1020)*100,2)),size=6)+
+  geom_text(aes(x=0.7,y=5,label=round((1/1020)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=-3,label=round((434/1020)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=5,label=round((481/1020)*100,2)),size=6)+
+  xlab("Mechanistic Prediction")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+  
+  scale_x_discrete(limits=c("FALSE","TRUE"),labels=c("Non-functional","Functional"))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")
+
+#Intermixed
+table(LibFdata[LibFdata$set=="mixing_WYFL_collapsed",]$Mech,LibFdata[LibFdata$set=="mixing_WYFL_collapsed",]$SlopeNorm2ptSD2>0)
+ggplot(LibFdata[LibFdata$set=="mixing_WYFL_collapsed",])+
+  geom_violin(aes(x=as.factor(Mech),y=SlopeNorm2ptSD2),scale = "count",linewidth=1.2,fill="navy")+
+  geom_hline(yintercept = 0, color="red")+
+  theme_classic()+
+  geom_text(aes(x=0.7,y=-3,label=round((105/1019)*100,2)),size=6)+
+  geom_text(aes(x=0.7,y=5,label=round((0/1019)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=-3,label=round((329/1019)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=5,label=round((585/1019)*100,2)),size=6)+
+  xlab("Mechanistic Prediction")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+  
+  scale_x_discrete(limits=c("FALSE","TRUE"),labels=c("Non-functional","Functional"))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")  
+
+#Amphipathic Helix
+table(LibFdata[LibFdata$set=="mixing_WYFL_wd5",]$Mech,LibFdata[LibFdata$set=="mixing_WYFL_wd5",]$SlopeNorm2ptSD2>0)
+ggplot(LibFdata[LibFdata$set=="mixing_WYFL_wd5",])+
+  geom_violin(aes(x=as.factor(Mech),y=SlopeNorm2ptSD2),scale = "count",linewidth=1.2,fill="darkgoldenrod2")+
+  geom_hline(yintercept = 0, color="red")+
+  theme_classic()+
+  geom_text(aes(x=0.7,y=-3,label=round((106/1024)*100,2)),size=6)+
+  geom_text(aes(x=0.7,y=5,label=round((0/1024)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=-3,label=round((752/1024)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=5,label=round((166/1024)*100,2)),size=6)+
+  xlab("Mechanistic Prediction")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+  
+  scale_x_discrete(limits=c("FALSE","TRUE"),labels=c("Non-functional","Functional"))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")
+
+#WD10
+table(LibFdata[LibFdata$set=="WD10",]$Mech,LibFdata[LibFdata$set=="WD10",]$SlopeNorm2ptSD2>0)
+ggplot(LibFdata[LibFdata$set=="WD10",])+
+  geom_violin(aes(x=as.factor(Mech),y=SlopeNorm2ptSD2),scale = "count",linewidth=1.2,fill="orange2")+
+  geom_hline(yintercept = 0, color="red")+
+  theme_classic()+
+  geom_text(aes(x=0.7,y=-3,label=round((328/1022)*100,2)),size=6)+
+  geom_text(aes(x=0.7,y=5,label=round((23/1022)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=-3,label=round((344/1022)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=5,label=round((327/1022)*100,2)),size=6)+
+  xlab("Mechanistic Prediction")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+  
+  scale_x_discrete(limits=c("FALSE","TRUE"),labels=c("Non-functional","Functional"))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")
+
+#FD10
+table(LibFdata[LibFdata$set=="FD10",]$Mech,LibFdata[LibFdata$set=="FD10",]$SlopeNorm2ptSD2>0)
+ggplot(LibFdata[LibFdata$set=="FD10",])+
+  geom_violin(aes(x=as.factor(Mech),y=SlopeNorm2ptSD2),scale = "count",linewidth=1.2,fill="#f7cb77")+
+  geom_hline(yintercept = 0, color="red")+
+  theme_classic()+
+  geom_text(aes(x=0.7,y=-3,label=round((347/1022)*100,2)),size=6)+
+  geom_text(aes(x=0.7,y=5,label=round((4/1022)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=-3,label=round((312/1022)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=5,label=round((359/1022)*100,2)),size=6)+
+  xlab("Mechanistic Prediction")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+  
+  scale_x_discrete(limits=c("FALSE","TRUE"),labels=c("Non-functional","Functional"))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")
+
+#LD10
+table(LibFdata[LibFdata$set=="LD10",]$Mech,LibFdata[LibFdata$set=="LD10",]$SlopeNorm2ptSD2>0)
+ggplot(LibFdata[LibFdata$set=="LD10",])+
+  geom_violin(aes(x=as.factor(Mech),y=SlopeNorm2ptSD2),scale = "count",linewidth=1.2,fill="yellow2")+
+  geom_hline(yintercept = 0, color="red")+
+  theme_classic()+
+  geom_text(aes(x=0.7,y=-3,label=round((323/1023)*100,2)),size=6)+
+  geom_text(aes(x=0.7,y=5,label=round((28/1023)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=-3,label=round((475/1023)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=5,label=round((197/1023)*100,2)),size=6)+
+  xlab("Mechanistic Prediction")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+  
+  scale_x_discrete(limits=c("FALSE","TRUE"),labels=c("Non-functional","Functional"))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")
+
+#YD10 sequences
+table(LibFdata[LibFdata$set=="YD10",]$Mech,LibFdata[LibFdata$set=="YD10",]$SlopeNorm2ptSD2>0)
+ggplot(LibFdata[LibFdata$set=="YD10",])+
+  geom_violin(aes(x=as.factor(Mech),y=SlopeNorm2ptSD2),scale = "count",linewidth=1.2,fill="#cf8902")+
+  geom_hline(yintercept = 0, color="red")+
+  theme_classic()+
+  geom_text(aes(x=0.7,y=-3,label=round((989/997)*100,2)),size=6)+
+  geom_text(aes(x=0.7,y=5,label=round((8/997)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=-3,label=round((0/997)*100,2)),size=6)+
+  geom_text(aes(x=2.3,y=5,label=round((0/997)*100,2)),size=6)+
+  xlab("Mechanistic Prediction")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+  
+  scale_x_discrete(limits=c("FALSE","TRUE"),labels=c("Non-functional","Functional"))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")
+
+#Combined graph
+Sets=c("mixing_WYFL_extended","mixing_WYFL_collapsed","mixing_WYFL_wd5","WD10","FD10","LD10","YD10")
+SetRename=c("Flanked","Intermixed","Amphipathic","WD10","FD10","LD10","YD10")
+Sets2=c("mixing_WYFL_extended_FALSE","mixing_WYFL_extended_TRUE",
+        "mixing_WYFL_collapsed_FALSE","mixing_WYFL_collapsed_TRUE",
+        "mixing_WYFL_wd5_FALSE","mixing_WYFL_wd5_TRUE",
+        "WD10_FALSE","WD10_TRUE","FD10_FALSE","FD10_TRUE",
+        "LD10_FALSE","LD10_TRUE","YD10_FALSE","")
+SetRename2=c("Flanked","Flanked","Intermixed","Intermixed","Amphipathic","Amphipathic","WD10","WD10","FD10","FD10","LD10","LD10","YD10","")
+SetColors=c(alpha("darkred",0.5),"darkred",alpha("navy",0.5),"navy",
+            alpha("darkgoldenrod2",0.5),"darkgoldenrod2",
+            alpha("orange2",0.5),"orange2",alpha("#f7cb77",0.5),"#f7cb77",
+            alpha("yellow2",0.5),"yellow2","#cf8902","#cf8902")
+
+filter(SpecificSets,Mech==TRUE)%>%
+  group_by(set)%>%
+  summarise(Agree=(sum(SlopeNorm2ptSD2>0)/sum(Mech))*100)
+
+ggplot(SpecificSets)+
+  geom_violin(aes(x=set,y=SlopeNorm2ptSD2,fill=SetMech,linetype=Mech),scale = "width",linewidth=1)+
+  geom_hline(yintercept = 0, color="red",linewidth=1.2)+
+  theme_classic()+
+  geom_text(aes(x=1.2,y=7.5,label=48.7),size=5)+
+  geom_text(aes(x=2.2,y=7.5,label=53.5),size=5)+
+  geom_text(aes(x=3.2,y=7.5,label=29.3),size=5)+
+  geom_text(aes(x=4.2,y=7.5,label=52.6),size=5)+
+  geom_text(aes(x=5.2,y=7.5,label=64.0),size=5)+
+  geom_text(aes(x=6.2,y=7.5,label=18.1),size=5)+
+  xlab("")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,8,2),limits = c(-3,8))+  
+  scale_x_discrete(limits=Sets,labels=SetRename)+
+  scale_fill_manual(limits=Sets2,labels=SetRename2,values=SetColors)+
+  scale_linetype_manual(values = c(3,1))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),
+        axis.title=element_text(size=16,face="bold"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        legend.position = "none")
+
+```

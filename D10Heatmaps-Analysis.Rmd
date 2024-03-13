@@ -1,0 +1,862 @@
+---
+title: "D10Heatmaps-Analysis"
+author: "David Cooper"
+date: "2023-03-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(pheatmap)
+library(limma)
+library(Biobase)
+library(MASS)
+library(caret)
+library(pROC)
+library(stringr)
+library(gridExtra)
+library(ggseqlogo)
+library(scales)
+source("ProcessingFunctions.R")
+
+```
+
+## Short Linear Motifs (SLiMs) Search in WD10, LD10, FD10, and YD10 Sequences
+
+Are any SLiMs enriched in the most functional D10 sequences?
+What size SLiMs exist?
+
+```{r Load and Prep Data}
+FilteredEset=readRDS("STARFilteredNormalizedEset.rds")
+D10Eset=FilteredEset[substr(FilteredEset@featureData@data$set,2,4)=="D10",]
+
+#Fdata data frames
+WD10fdata=FilteredEset[FilteredEset@featureData@data$set=="WD10"]@featureData@data%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2)
+LD10fdata=FilteredEset[FilteredEset@featureData@data$set=="LD10"]@featureData@data%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2)
+FD10fdata=FilteredEset[FilteredEset@featureData@data$set=="FD10"]@featureData@data%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2)
+YD10fdata=FilteredEset[FilteredEset@featureData@data$set=="YD10"]@featureData@data%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2)
+
+```
+
+## LD10
+
+```{r LD10 Prep Data}
+LD10fdata$SeqNoG=substr(LD10fdata$aa_seq,11,20)
+LD10AllSeq=dplyr::select(LD10fdata,id_number,SeqNoG)
+LD10AllSeqvector=LD10AllSeq$SeqNoG
+names(LD10AllSeqvector)=LD10AllSeq$id_number
+
+AllWindow2=FindWindowsV2(LD10AllSeqvector,2)
+UnlistWindow2=data.frame(Motif=unlist(AllWindow2))
+UnlistWindow2=dplyr::mutate(UnlistWindow2,ID=substr(rownames(UnlistWindow2),1,4),
+                            Start=substr(UnlistWindow2$Motif,1,1),
+                            End=substr(UnlistWindow2$Motif,2,2))
+UnlistWindow2=dplyr::mutate(UnlistWindow2,Slope=LD10fdata$SlopeNorm2ptSD2[match(UnlistWindow2$ID,LD10fdata$id_number)])
+Window2Mat=group_by(UnlistWindow2,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow3=FindWindowsV2(LD10AllSeqvector,3)
+UnlistWindow3=data.frame(Motif=unlist(AllWindow3))
+UnlistWindow3=dplyr::mutate(UnlistWindow3,ID=substr(rownames(UnlistWindow3),1,4),
+                            Start=substr(UnlistWindow3$Motif,1,2),
+                            End=substr(UnlistWindow3$Motif,3,mean(nchar(UnlistWindow3$Motif))))
+UnlistWindow3=dplyr::mutate(UnlistWindow3,Slope=LD10fdata$SlopeNorm2ptSD2[match(UnlistWindow3$ID,LD10fdata$id_number)])
+Window3Mat=group_by(UnlistWindow3,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow4=FindWindowsV2(LD10AllSeqvector,4)
+UnlistWindow4=data.frame(Motif=unlist(AllWindow4))
+UnlistWindow4=dplyr::mutate(UnlistWindow4,ID=substr(rownames(UnlistWindow4),1,4),
+                            Start=substr(UnlistWindow4$Motif,1,2),
+                            End=substr(UnlistWindow4$Motif,3,mean(nchar(UnlistWindow4$Motif))))
+UnlistWindow4=dplyr::mutate(UnlistWindow4,Slope=LD10fdata$SlopeNorm2ptSD2[match(UnlistWindow4$ID,LD10fdata$id_number)])
+Window4Mat=group_by(UnlistWindow4,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow5=FindWindowsV2(LD10AllSeqvector,5)
+UnlistWindow5=data.frame(Motif=unlist(AllWindow5))
+UnlistWindow5=dplyr::mutate(UnlistWindow5,ID=substr(rownames(UnlistWindow5),1,4),
+                            Start=substr(UnlistWindow5$Motif,1,2),
+                            End=substr(UnlistWindow5$Motif,3,mean(nchar(UnlistWindow5$Motif))))
+UnlistWindow5=dplyr::mutate(UnlistWindow5,Slope=LD10fdata$SlopeNorm2ptSD2[match(UnlistWindow5$ID,LD10fdata$id_number)])
+Window5Mat=group_by(UnlistWindow5,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow6=FindWindowsV2(LD10AllSeqvector,6)
+UnlistWindow6=data.frame(Motif=unlist(AllWindow6))
+UnlistWindow6=dplyr::mutate(UnlistWindow6,ID=substr(rownames(UnlistWindow6),1,4),
+                            Start=substr(UnlistWindow6$Motif,1,2),
+                            End=substr(UnlistWindow6$Motif,3,mean(nchar(UnlistWindow6$Motif))))
+UnlistWindow6=dplyr::mutate(UnlistWindow6,Slope=LD10fdata$SlopeNorm2ptSD2[match(UnlistWindow6$ID,LD10fdata$id_number)])
+Window6Mat=group_by(UnlistWindow6,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow7=FindWindowsV2(LD10AllSeqvector,7)
+UnlistWindow7=data.frame(Motif=unlist(AllWindow7))
+UnlistWindow7=dplyr::mutate(UnlistWindow7,ID=substr(rownames(UnlistWindow7),1,4),
+                            Start=substr(UnlistWindow7$Motif,1,2),
+                            End=substr(UnlistWindow7$Motif,3,mean(nchar(UnlistWindow7$Motif))))
+UnlistWindow7=dplyr::mutate(UnlistWindow7,Slope=LD10fdata$SlopeNorm2ptSD2[match(UnlistWindow7$ID,LD10fdata$id_number)])
+Window7Mat=group_by(UnlistWindow7,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow8=FindWindowsV2(LD10AllSeqvector,8)
+UnlistWindow8=data.frame(Motif=unlist(AllWindow8))
+UnlistWindow8=dplyr::mutate(UnlistWindow8,ID=substr(rownames(UnlistWindow8),1,4),
+                            Start=substr(UnlistWindow8$Motif,1,3),
+                            End=substr(UnlistWindow8$Motif,4,mean(nchar(UnlistWindow8$Motif))))
+UnlistWindow8=dplyr::mutate(UnlistWindow8,Slope=LD10fdata$SlopeNorm2ptSD2[match(UnlistWindow8$ID,LD10fdata$id_number)])
+Window8Mat=group_by(UnlistWindow8,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow9=FindWindowsV2(LD10AllSeqvector,9)
+UnlistWindow9=data.frame(Motif=unlist(AllWindow9))
+UnlistWindow9=dplyr::mutate(UnlistWindow9,ID=substr(rownames(UnlistWindow9),1,4),
+                            Start=substr(UnlistWindow9$Motif,1,4),
+                            End=substr(UnlistWindow9$Motif,5,mean(nchar(UnlistWindow9$Motif))))
+UnlistWindow9=dplyr::mutate(UnlistWindow9,Slope=LD10fdata$SlopeNorm2ptSD2[match(UnlistWindow9$ID,LD10fdata$id_number)])
+Window9Mat=group_by(UnlistWindow9,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+```
+
+```{r LD10 Heatmaps Slope}
+Low=min(rbind(Window8Mat)$AvgSlope)-0.1
+High=max(rbind(Window8Mat)$AvgSlope)+0.1
+
+ggplot(Window2Mat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "LD10 2 Residue Motifs")+
+  xlab("Residue 1")+
+  ylab("Residue 2")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window3Mat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "LD10 3 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residue 3")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window4Mat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "LD10 4 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residues 3-4")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window5Mat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "LD10 5 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residues 3-5")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window6Mat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "LD10 6 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residues 3-6")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window7Mat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "LD10 7 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residues 3-7")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window8Mat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "LD10 8 Residue Motifs")+
+  xlab("Residues 1-3")+
+  ylab("Residues 4-8")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+```
+
+```{r LD10 Window9 Motif Only}
+#Mask cells that do not have the LDLXDLL motif to highlight cells that have the motif
+LD10motifOnly=Window9Mat
+LD10motifOnly$HasMotif=grepl("LDL.DLL",paste(LD10motifOnly$Start,LD10motifOnly$End,sep = ""))
+LD10motifOnly[LD10motifOnly$HasMotif==FALSE,3]=0
+
+ggplot(LD10motifOnly,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 9 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c((round(min(Window9Mat$AvgSlope),digits = 2)-0.01), (round(max(Window9Mat$AvgSlope),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+```
+
+```{r LD10 Heatmaps Deviation}
+ggplot(Window2Mat,aes(x=Start,y=End,fill=Deviation))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 2 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c((round(min(Window2Mat$Deviation),digits = 2)-0.01), (round(max(Window2Mat$Deviation),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("green"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window3Mat,aes(x=Start,y=End,fill=Deviation))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 3 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c((round(min(Window3Mat$Deviation),digits = 2)-0.01), (round(max(Window3Mat$Deviation),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("green"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window4Mat,aes(x=Start,y=End,fill=Deviation))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 4 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c((round(min(Window4Mat$Deviation),digits = 2)-0.01), (round(max(Window4Mat$Deviation),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("green"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window5Mat,aes(x=Start,y=End,fill=Deviation))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 5 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c((round(min(Window5Mat$Deviation),digits = 2)-0.01), (round(max(Window5Mat$Deviation),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("green"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window6Mat,aes(x=Start,y=End,fill=Deviation))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 6 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c((round(min(Window6Mat$Deviation),digits = 2)-0.01), (round(max(Window6Mat$Deviation),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("green"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window7Mat,aes(x=Start,y=End,fill=Deviation))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 7 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c((round(min(Window7Mat$Deviation),digits = 2)-0.01), (round(max(Window7Mat$Deviation),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("green"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window8Mat,aes(x=Start,y=End,fill=Deviation))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 8 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c((round(min(Window8Mat$Deviation),digits = 2)-0.01), (round(max(Window8Mat$Deviation),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("green"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window9Mat,aes(x=Start,y=End,fill=Deviation))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 9 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c((round(min(Window9Mat$Deviation),digits = 2)-0.01), (round(max(Window9Mat$Deviation),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("green"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+```
+
+```{r LD10 Heatmaps Slope and Deviation}
+ggplot(Window7Mat,aes(x=Start,y=End,size=Deviation,color=AvgSlope))+
+  geom_point()+
+  geom_point(shape=1, color="black")+
+  theme_classic()+
+  labs(title = "LD10 7 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_color_gradient2(limits=c((round(min(Window7Mat$AvgSlope),digits = 2)-0.01), (round(max(Window7Mat$AvgSlope),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"),panel.background = element_rect(fill = 'grey'))
+
+```
+
+## FD10
+
+```{r FD10 Prep Data}
+FD10fdata$SeqNoG=substr(FD10fdata$aa_seq,11,20)
+FD10AllSeq=dplyr::select(FD10fdata,id_number,SeqNoG)
+FD10AllSeqvector=FD10AllSeq$SeqNoG
+names(FD10AllSeqvector)=FD10AllSeq$id_number
+
+AllWindow2F=FindWindowsV2(FD10AllSeqvector,2)
+UnlistWindow2F=data.frame(Motif=unlist(AllWindow2F))
+UnlistWindow2F=dplyr::mutate(UnlistWindow2F,ID=substr(rownames(UnlistWindow2F),1,4),
+                            Start=substr(UnlistWindow2F$Motif,1,1),
+                            End=substr(UnlistWindow2F$Motif,2,2))
+UnlistWindow2F=dplyr::mutate(UnlistWindow2F,Slope=FD10fdata$SlopeNorm2ptSD2[match(UnlistWindow2F$ID,FD10fdata$id_number)])
+Window2FMat=group_by(UnlistWindow2F,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow3F=FindWindowsV2(FD10AllSeqvector,3)
+UnlistWindow3F=data.frame(Motif=unlist(AllWindow3F))
+UnlistWindow3F=dplyr::mutate(UnlistWindow3F,ID=substr(rownames(UnlistWindow3F),1,4),
+                            Start=substr(UnlistWindow3F$Motif,1,2),
+                            End=substr(UnlistWindow3F$Motif,3,mean(nchar(UnlistWindow3F$Motif))))
+UnlistWindow3F=dplyr::mutate(UnlistWindow3F,Slope=FD10fdata$SlopeNorm2ptSD2[match(UnlistWindow3F$ID,FD10fdata$id_number)])
+Window3FMat=group_by(UnlistWindow3F,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow4F=FindWindowsV2(FD10AllSeqvector,4)
+UnlistWindow4F=data.frame(Motif=unlist(AllWindow4F))
+UnlistWindow4F=dplyr::mutate(UnlistWindow4F,ID=substr(rownames(UnlistWindow4F),1,4),
+                            Start=substr(UnlistWindow4F$Motif,1,2),
+                            End=substr(UnlistWindow4F$Motif,3,mean(nchar(UnlistWindow4F$Motif))))
+UnlistWindow4F=dplyr::mutate(UnlistWindow4F,Slope=FD10fdata$SlopeNorm2ptSD2[match(UnlistWindow4F$ID,FD10fdata$id_number)])
+Window4FMat=group_by(UnlistWindow4F,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow5F=FindWindowsV2(FD10AllSeqvector,5)
+UnlistWindow5F=data.frame(Motif=unlist(AllWindow5F))
+UnlistWindow5F=dplyr::mutate(UnlistWindow5F,ID=substr(rownames(UnlistWindow5F),1,4),
+                            Start=substr(UnlistWindow5F$Motif,1,2),
+                            End=substr(UnlistWindow5F$Motif,3,mean(nchar(UnlistWindow5F$Motif))))
+UnlistWindow5F=dplyr::mutate(UnlistWindow5F,Slope=FD10fdata$SlopeNorm2ptSD2[match(UnlistWindow5F$ID,FD10fdata$id_number)])
+Window5FMat=group_by(UnlistWindow5F,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow6F=FindWindowsV2(FD10AllSeqvector,6)
+UnlistWindow6F=data.frame(Motif=unlist(AllWindow6F))
+UnlistWindow6F=dplyr::mutate(UnlistWindow6F,ID=substr(rownames(UnlistWindow6F),1,4),
+                            Start=substr(UnlistWindow6F$Motif,1,2),
+                            End=substr(UnlistWindow6F$Motif,3,mean(nchar(UnlistWindow6F$Motif))))
+UnlistWindow6F=dplyr::mutate(UnlistWindow6F,Slope=FD10fdata$SlopeNorm2ptSD2[match(UnlistWindow6F$ID,FD10fdata$id_number)])
+Window6FMat=group_by(UnlistWindow6F,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow7F=FindWindowsV2(FD10AllSeqvector,7)
+UnlistWindow7F=data.frame(Motif=unlist(AllWindow7F))
+UnlistWindow7F=dplyr::mutate(UnlistWindow7F,ID=substr(rownames(UnlistWindow7F),1,4),
+                            Start=substr(UnlistWindow7F$Motif,1,2),
+                            End=substr(UnlistWindow7F$Motif,3,mean(nchar(UnlistWindow7F$Motif))))
+UnlistWindow7F=dplyr::mutate(UnlistWindow7F,Slope=FD10fdata$SlopeNorm2ptSD2[match(UnlistWindow7F$ID,FD10fdata$id_number)])
+Window7FMat=group_by(UnlistWindow7F,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow8F=FindWindowsV2(FD10AllSeqvector,8)
+UnlistWindow8F=data.frame(Motif=unlist(AllWindow8F))
+UnlistWindow8F=dplyr::mutate(UnlistWindow8F,ID=substr(rownames(UnlistWindow8F),1,4),
+                            Start=substr(UnlistWindow8F$Motif,1,3),
+                            End=substr(UnlistWindow8F$Motif,4,mean(nchar(UnlistWindow8F$Motif))))
+UnlistWindow8F=dplyr::mutate(UnlistWindow8F,Slope=FD10fdata$SlopeNorm2ptSD2[match(UnlistWindow8F$ID,FD10fdata$id_number)])
+Window8FMat=group_by(UnlistWindow8F,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow9F=FindWindowsV2(FD10AllSeqvector,9)
+UnlistWindow9F=data.frame(Motif=unlist(AllWindow9F))
+UnlistWindow9F=dplyr::mutate(UnlistWindow9F,ID=substr(rownames(UnlistWindow9F),1,4),
+                            Start=substr(UnlistWindow9F$Motif,1,4),
+                            End=substr(UnlistWindow9F$Motif,5,mean(nchar(UnlistWindow9F$Motif))))
+UnlistWindow9F=dplyr::mutate(UnlistWindow9F,Slope=FD10fdata$SlopeNorm2ptSD2[match(UnlistWindow9F$ID,FD10fdata$id_number)])
+Window9FMat=group_by(UnlistWindow9F,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+```
+
+```{r FD10 Heatmaps Slope}
+Low=min(rbind(Window8FMat)$AvgSlope)-0.1
+High=max(rbind(Window8FMat)$AvgSlope)+0.1
+
+ggplot(Window2FMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "FD10 2 Residue Motifs")+
+  xlab("Residue 1")+
+  ylab("Residue 2")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window3FMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "FD10 3 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residue 3")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window4FMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "FD10 4 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residues 3-4")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window5FMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "FD10 5 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residues 3-5")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window6FMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "FD10 6 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residues 3-6")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window7FMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "FD10 7 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residues 3-7")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window8FMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "FD10 8 Residue Motifs")+
+  xlab("Residues 1-3")+
+  ylab("Residues 4-8")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+```
+
+```{r FD10 Heatmaps Slope and Deviation}
+ggplot(Window7FMat,aes(x=Start,y=End,fill=Deviation))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "FD10 7 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c((round(min(Window7FMat$Deviation),digits = 2)-0.01), (round(max(Window7FMat$Deviation),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("green"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window7FMat,aes(x=Start,y=End,size=Deviation,color=AvgSlope))+
+  geom_point()+
+  theme_classic()+
+  labs(title = "FD10 7 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_color_gradient2(limits=c((round(min(Window7FMat$AvgSlope),digits = 2)-0.01), (round(max(Window7FMat$AvgSlope),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"),panel.background = element_rect(fill = 'grey'))
+
+```
+
+## WD10
+
+```{r WD10 Prep Data}
+WD10fdata$SeqNoG=substr(WD10fdata$aa_seq,11,20)
+WD10AllSeq=dplyr::select(WD10fdata,id_number,SeqNoG)
+WD10AllSeqvector=WD10AllSeq$SeqNoG
+names(WD10AllSeqvector)=WD10AllSeq$id_number
+
+AllWindow2W=FindWindowsV2(WD10AllSeqvector,2)
+UnlistWindow2W=data.frame(Motif=unlist(AllWindow2W))
+UnlistWindow2W=dplyr::mutate(UnlistWindow2W,ID=substr(rownames(UnlistWindow2W),1,4),
+                            Start=substr(UnlistWindow2W$Motif,1,1),
+                            End=substr(UnlistWindow2W$Motif,2,2))
+UnlistWindow2W=dplyr::mutate(UnlistWindow2W,Slope=WD10fdata$SlopeNorm2ptSD2[match(UnlistWindow2W$ID,WD10fdata$id_number)])
+Window2WMat=group_by(UnlistWindow2W,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow3W=FindWindowsV2(WD10AllSeqvector,3)
+UnlistWindow3W=data.frame(Motif=unlist(AllWindow3W))
+UnlistWindow3W=dplyr::mutate(UnlistWindow3W,ID=substr(rownames(UnlistWindow3W),1,4),
+                            Start=substr(UnlistWindow3W$Motif,1,2),
+                            End=substr(UnlistWindow3W$Motif,3,mean(nchar(UnlistWindow3W$Motif))))
+UnlistWindow3W=dplyr::mutate(UnlistWindow3W,Slope=WD10fdata$SlopeNorm2ptSD2[match(UnlistWindow3W$ID,WD10fdata$id_number)])
+Window3WMat=group_by(UnlistWindow3W,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow4W=FindWindowsV2(WD10AllSeqvector,4)
+UnlistWindow4W=data.frame(Motif=unlist(AllWindow4W))
+UnlistWindow4W=dplyr::mutate(UnlistWindow4W,ID=substr(rownames(UnlistWindow4W),1,4),
+                            Start=substr(UnlistWindow4W$Motif,1,2),
+                            End=substr(UnlistWindow4W$Motif,3,mean(nchar(UnlistWindow4W$Motif))))
+UnlistWindow4W=dplyr::mutate(UnlistWindow4W,Slope=WD10fdata$SlopeNorm2ptSD2[match(UnlistWindow4W$ID,WD10fdata$id_number)])
+Window4WMat=group_by(UnlistWindow4W,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow5W=FindWindowsV2(WD10AllSeqvector,5)
+UnlistWindow5W=data.frame(Motif=unlist(AllWindow5W))
+UnlistWindow5W=dplyr::mutate(UnlistWindow5W,ID=substr(rownames(UnlistWindow5W),1,4),
+                            Start=substr(UnlistWindow5W$Motif,1,2),
+                            End=substr(UnlistWindow5W$Motif,3,mean(nchar(UnlistWindow5W$Motif))))
+UnlistWindow5W=dplyr::mutate(UnlistWindow5W,Slope=WD10fdata$SlopeNorm2ptSD2[match(UnlistWindow5W$ID,WD10fdata$id_number)])
+Window5WMat=group_by(UnlistWindow5W,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow6W=FindWindowsV2(WD10AllSeqvector,6)
+UnlistWindow6W=data.frame(Motif=unlist(AllWindow6W))
+UnlistWindow6W=dplyr::mutate(UnlistWindow6W,ID=substr(rownames(UnlistWindow6W),1,4),
+                            Start=substr(UnlistWindow6W$Motif,1,2),
+                            End=substr(UnlistWindow6W$Motif,3,mean(nchar(UnlistWindow6W$Motif))))
+UnlistWindow6W=dplyr::mutate(UnlistWindow6W,Slope=WD10fdata$SlopeNorm2ptSD2[match(UnlistWindow6W$ID,WD10fdata$id_number)])
+Window6WMat=group_by(UnlistWindow6W,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow7W=FindWindowsV2(WD10AllSeqvector,7)
+UnlistWindow7W=data.frame(Motif=unlist(AllWindow7W))
+UnlistWindow7W=dplyr::mutate(UnlistWindow7W,ID=substr(rownames(UnlistWindow7W),1,4),
+                            Start=substr(UnlistWindow7W$Motif,1,2),
+                            End=substr(UnlistWindow7W$Motif,3,mean(nchar(UnlistWindow7W$Motif))))
+UnlistWindow7W=dplyr::mutate(UnlistWindow7W,Slope=WD10fdata$SlopeNorm2ptSD2[match(UnlistWindow7W$ID,WD10fdata$id_number)])
+Window7WMat=group_by(UnlistWindow7W,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow8W=FindWindowsV2(WD10AllSeqvector,8)
+UnlistWindow8W=data.frame(Motif=unlist(AllWindow8W))
+UnlistWindow8W=dplyr::mutate(UnlistWindow8W,ID=substr(rownames(UnlistWindow8W),1,4),
+                            Start=substr(UnlistWindow8W$Motif,1,3),
+                            End=substr(UnlistWindow8W$Motif,4,mean(nchar(UnlistWindow8W$Motif))))
+UnlistWindow8W=dplyr::mutate(UnlistWindow8W,Slope=WD10fdata$SlopeNorm2ptSD2[match(UnlistWindow8W$ID,WD10fdata$id_number)])
+Window8WMat=group_by(UnlistWindow8W,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+AllWindow9W=FindWindowsV2(WD10AllSeqvector,9)
+UnlistWindow9W=data.frame(Motif=unlist(AllWindow9W))
+UnlistWindow9W=dplyr::mutate(UnlistWindow9W,ID=substr(rownames(UnlistWindow9W),1,4),
+                            Start=substr(UnlistWindow9W$Motif,1,4),
+                            End=substr(UnlistWindow9W$Motif,5,mean(nchar(UnlistWindow9W$Motif))))
+UnlistWindow9W=dplyr::mutate(UnlistWindow9W,Slope=WD10fdata$SlopeNorm2ptSD2[match(UnlistWindow9W$ID,WD10fdata$id_number)])
+Window9WMat=group_by(UnlistWindow9W,Start,End)%>%summarise(AvgSlope=mean(Slope),Deviation=sd(Slope))
+
+```
+
+```{r WD10 Heatmaps}
+Low=min(rbind(Window8WMat)$AvgSlope)-0.1
+High=max(rbind(Window8WMat)$AvgSlope)+0.1
+
+ggplot(Window2WMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "WD10 2 Residue Motifs")+
+  xlab("Residue 1")+
+  ylab("Residue 2")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window3WMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "WD10 3 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residue 3")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window4WMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "WD10 4 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residues 3-4")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window5WMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "WD10 5 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residues 3-5")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window6WMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "WD10 6 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residues 3-6")+  
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window7WMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "WD10 7 Residue Motifs")+
+  xlab("Residues 1-2")+
+  ylab("Residues 3-7")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+ggplot(Window8WMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  #labs(title = "WD10 8 Residue Motifs")+
+  xlab("Residues 1-3")+
+  ylab("Residues 4-8")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("navy"),mid = "white",high = muted("red"),midpoint = 0,name="Avg.\nSlope")+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position="bottom")
+
+```
+
+```{r WD10 Heatmaps Slope and Deviation}
+ggplot(Window7WMat,aes(x=Start,y=End,fill=Deviation))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "WD10 7 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c((round(min(Window7WMat$Deviation),digits = 2)-0.01), (round(max(Window7WMat$Deviation),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("green"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window7WMat,aes(x=Start,y=End,size=Deviation,color=AvgSlope))+
+  geom_point()+
+  theme_classic()+
+  labs(title = "WD10 7 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_color_gradient2(limits=c((round(min(Window7WMat$AvgSlope),digits = 2)-0.01), (round(max(Window7WMat$AvgSlope),digits = 2)+0.01)),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"),panel.background = element_rect(fill = 'grey'))
+
+```
+
+## Motif7 Correlations
+
+```{r Motif7 Correlations}
+#Correlation for the pattern of functional mini-motifs across sets
+cor(Window7FMat$AvgSlope,Window7WMat$AvgSlope,method = "spearman")
+cor(Window7Mat$AvgSlope,Window7FMat$AvgSlope,method = "spearman")
+cor(Window7Mat$AvgSlope,Window7WMat$AvgSlope,method = "spearman")
+
+#Percentage of functional mini-motifs in each set
+sum(Window7Mat$AvgSlope>0)/nrow(Window7Mat)
+sum(Window7FMat$AvgSlope>0)/nrow(Window7FMat)
+sum(Window7WMat$AvgSlope>0)/nrow(Window7WMat)
+
+```
+
+## Normalized Scales
+
+Normalize all heatmaps to the same scale
+
+```{r LD10 Normalized Scale}
+Low=min(rbind(Window7Mat,Window7FMat,Window7WMat)$AvgSlope)-0.1
+High=max(rbind(Window7Mat,Window7FMat,Window7WMat)$AvgSlope)+0.1
+
+ggplot(Window3Mat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 3 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window4Mat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 4 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window5Mat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 5 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window6Mat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 6 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window7Mat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "LD10 7 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+```
+
+```{r FD10 Normalized Scale}
+Low=min(rbind(Window7Mat,Window7FMat,Window7WMat)$AvgSlope)-0.1
+High=max(rbind(Window7Mat,Window7FMat,Window7WMat)$AvgSlope)+0.1
+
+ggplot(Window3FMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "FD10 3 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window4FMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "FD10 4 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window5FMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "FD10 5 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window6FMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "FD10 6 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window7FMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "FD10 7 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+```
+
+```{r WD10 Normalized Scale}
+Low=min(rbind(Window7Mat,Window7FMat,Window7WMat)$AvgSlope)-0.1
+High=max(rbind(Window7Mat,Window7FMat,Window7WMat)$AvgSlope)+0.1
+
+ggplot(Window3WMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "WD10 3 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window4WMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "WD10 4 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window5WMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "WD10 5 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window6WMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "WD10 6 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+ggplot(Window7WMat,aes(x=Start,y=End,fill=AvgSlope))+
+  geom_tile()+
+  theme_classic()+
+  labs(title = "WD10 7 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"))
+
+```
+
+```{r Normalized Scale SD plots}
+Low=min(rbind(Window7Mat,Window7FMat,Window7WMat)$AvgSlope)-0.1
+High=max(rbind(Window7Mat,Window7FMat,Window7WMat)$AvgSlope)+0.1
+
+SDlow=min(rbind(Window7Mat,Window7FMat,Window7WMat)$Deviation)-0.1
+SDhigh=max(rbind(Window7Mat,Window7FMat,Window7WMat)$Deviation)+0.1
+
+ggplot(Window7Mat,aes(x=Start,y=End,size=Deviation,color=AvgSlope))+
+  geom_point()+
+  geom_point(shape=1, color="black")+
+  theme_classic()+
+  labs(title = "LD10 7 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_color_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  scale_size_binned(limits = c(SDlow,SDhigh),breaks = seq(0.5,3,0.5))+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"),panel.background = element_rect(fill = 'grey'))
+
+ggplot(Window7WMat,aes(x=Start,y=End,size=Deviation,color=AvgSlope))+
+  geom_point()+
+  geom_point(shape=1, color="black")+
+  theme_classic()+
+  labs(title = "WD10 7 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_color_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  scale_size_binned(limits = c(SDlow,SDhigh),breaks = seq(0.5,3,0.5))+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"),panel.background = element_rect(fill = 'grey'))
+
+ggplot(Window7FMat,aes(x=Start,y=End,size=Deviation,color=AvgSlope))+
+  geom_point()+
+  geom_point(shape=1, color="black")+
+  theme_classic()+
+  labs(title = "FD10 7 Residue Motifs")+
+  scale_x_discrete(position = "top")+
+  scale_color_gradient2(limits=c(Low,High),low = muted("blue"),mid = "white",high = muted("red"),midpoint = 0)+
+  scale_size_binned(limits = c(SDlow,SDhigh),breaks = seq(0.5,3,0.5))+
+  theme(axis.text = element_text(size=14,face = "bold",color ="black"), axis.title=element_text(size=16,face="bold"),panel.background = element_rect(fill = 'grey'))
+
+
+```
+
+```{r Correlation plots}
+CorrPlotDF=data.frame(LD10=Window7Mat$AvgSlope,FD10=Window7FMat$AvgSlope,WD10=Window7WMat$AvgSlope)
+
+ggplot(CorrPlotDF,aes(LD10,WD10))+
+  geom_point(size=3)+
+  geom_smooth()+
+  theme_classic()
+
+ggplot(CorrPlotDF,aes(LD10,FD10))+
+  geom_point(size=3)+
+  geom_smooth()+
+  theme_classic()
+
+ggplot(CorrPlotDF,aes(FD10,WD10))+
+  geom_point(size=3)+
+  geom_smooth()+
+  theme_classic()
+
+```
+
+## MEME Input
+
+Preparing FASTA formatted files to use as an input for MEME motif search. 
+
+```{r Make Fasta for MEME}
+#Top 50 LD10
+LD10top50=arrange(LD10fdata,desc(SlopeNorm2ptSD2))[1:50,]$SeqNoG
+names(LD10top50)=arrange(LD10fdata,desc(SlopeNorm2ptSD2))[1:50,]$id_number
+MakeFasta(LD10top50,"LD10top50.fasta")
+
+#Top 50 FD10
+FD10top50=arrange(FD10fdata,desc(SlopeNorm2ptSD2))[1:50,]$SeqNoG
+names(FD10top50)=arrange(FD10fdata,desc(SlopeNorm2ptSD2))[1:50,]$id_number
+MakeFasta(FD10top50,"FD10top50.fasta")
+
+#Top 50 WD10
+WD10top50=arrange(WD10fdata,desc(SlopeNorm2ptSD2))[1:50,]$SeqNoG
+names(WD10top50)=arrange(WD10fdata,desc(SlopeNorm2ptSD2))[1:50,]$id_number
+MakeFasta(WD10top50,"WD10top50.fasta")
+
+```

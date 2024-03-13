@@ -1,0 +1,165 @@
+---
+title: "Controls-Analysis"
+author: "David Cooper"
+date: "2023-02-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(pheatmap)
+library(limma)
+library(Biobase)
+library(MASS)
+library(caret)
+library(pROC)
+library(stringr)
+source("ProcessingFunctions.R")
+
+```
+
+```{r Load and Prep Data}
+FilteredEset=readRDS("STARFilteredNormalizedEset.rds")
+ControlsEset=FilteredEset[substr(FilteredEset@featureData@data$set,1,7)=="natural",]
+ControlsDF=as.data.frame(ControlsEset@featureData@data)
+
+```
+
+## Internal Controls
+
+What is the distribution of functionality of the library's internal controls?
+
+```{r Select Internal Controls}
+table(FilteredEset@featureData@data$set)
+table(FilteredEset@featureData@data[substr(FilteredEset@featureData@data$set,1,7)=="natural",]$extra)
+Fig1Controls=filter(as.data.frame(FilteredEset@featureData@data),aa_seq=="GGGGDFDLDMLGDFDLDMLG"|
+                                                                 aa_seq=="GGGGGGGGGGDDDWWWWWDD"|
+                                                                 aa_seq=="WDWDWDWDWDWDWDWDWDWD"|
+                                                                 aa_seq=="GGGGGGGGTMDDVYNYLFDD"|
+                                                                 aa_seq=="GGGGGLSQETFSDLWKLLPE"|
+                                                                 aa_seq=="WWWWWWWWWWDDDDDDDDDD"|
+                                                                 set=="stop_first")
+
+#Fig1Controls=Fig1Controls%>%mutate(extra=replace(extra,extra=="",Fig1Controls[extra=="",2]))
+StatsFig1Controls=group_by(Fig1Controls,aa_seq)%>%summarise(sdslope=sd(SlopeNorm2ptSD2),SlopeNorm2ptSD2=mean(SlopeNorm2ptSD2))
+
+ggplot(Fig1Controls,aes(x=aa_seq,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+  
+  geom_jitter(size=1.2,width = 0.4,height = 0,alpha=0.6)+  
+  geom_errorbar(aes(ymin=SlopeNorm2ptSD2-2*sdslope,ymax=SlopeNorm2ptSD2+2*sdslope),data = StatsFig1Controls,width=0.5,linewidth=1)+
+  geom_point(data = StatsFig1Controls,size=1,shape=3)+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  #labs(title="Controls")+
+  xlab("")+
+  ylab("GAL4 Library Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold",color = "black"))+
+#  scale_x_discrete(limits=c("*","GGGGDFDLDMLGDFDLDMLG","GGGGGGGGTMDDVYNYLFDD","GGGGGLSQETFSDLWKLLPE","GGGGGGGGGGDDDWWWWWDD","WDWDWDWDWDWDWDWDWDWD","WWWWWWWWWWDDDDDDDDDD"),labels=c("Null (stop codon)","VP16 minX2","Gal4 (860-872)","p53","D3W5D2","(WD)10","W10D10"))
+  scale_x_discrete(limits=c("*","WWWWWWWWWWDDDDDDDDDD","GGGGGLSQETFSDLWKLLPE","GGGGGGGGTMDDVYNYLFDD","WDWDWDWDWDWDWDWDWDWD","GGGGGGGGGGDDDWWWWWDD","GGGGDFDLDMLGDFDLDMLG"),
+                   labels=c("Null (stop codon)","W10D10","p53","Gal4 (860-872)","(WD)10","D3W5D2","VP16 minX2"))
+  
+```
+
+## Reproducibility of Controls
+
+How reproducible are controls across libraries?
+
+```{r HSF1 Library Controls Comparison}
+NewControls=dplyr::select(ControlsDF,aa_seq,extra,SlopeNorm2ptSD2)%>%group_by(extra)%>%summarise(mean(SlopeNorm2ptSD2))
+HSFcontrols=read.csv("HSF1_wt_tad.csv")
+CombinedControls=merge(HSFcontrols,NewControls,by.x = "name",by.y = "extra")%>%filter(!is.na(slope))
+colnames(CombinedControls)=c("name","seq","slope_HSF1","slope_GAL4")
+
+ggplot(CombinedControls,aes(y=slope_GAL4,x=slope_HSF1,label=name))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 0,color="red",linewidth=1.2)+
+  geom_smooth(method = lm,linewidth=2)+
+  geom_point(size=4)+
+  theme_classic()+
+  ylab("GAL4 Library Slope")+
+  xlab("HSF1 Library Slope")+
+  ylim(-2,6)+
+  xlim(-1,9)+
+  theme(axis.text = element_text(size=14,face = "bold"),axis.title=element_text(size=16,face="bold"))+
+  geom_text(aes(label=ifelse(slope_HSF1>0.8|slope_GAL4>0,as.character(name),'')),hjust=0.3,vjust=-1)
+
+#Spearman correlation
+cor(CombinedControls$slope_HSF1,CombinedControls$slope_GAL4,method = "spearman")
+
+```
+
+```{r WDdesign Library WD10 Comparison}
+WDdesign=read.csv("WD_design_library.csv")
+AllSeqdf=FilteredEset@featureData@data
+AllSeqdf$WDdesignSlope=WDdesign$slope[match(AllSeqdf$aa_seq,WDdesign$aa_seq)]
+AllSeqdf=na.omit(AllSeqdf)
+
+#WD controls
+ggplot(AllSeqdf[substr(AllSeqdf$set,1,11)=="WD_controls",],aes(y=SlopeNorm2ptSD2,x=WDdesignSlope))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 0,color="red",linewidth=1.2)+
+  geom_smooth(method = lm,linewidth=2)+
+  geom_point(size=3)+
+  theme_classic()+
+  ylab("GAL4 Library Slope")+
+  xlab("WDdesign Library Slope")+
+  #ylim(-2,6)+
+  #xlim(-1,9)+
+  geom_text(aes(x=1,y=4.7,label="DDDWWWWWDD"),size=5,hjust=0)+
+  geom_text(aes(x=1,y=3,label="(WD)10"),size=5,hjust=0)+
+  geom_text(aes(x=0.1,y=-1.5,label="W10D10"),size=5,hjust=0)+
+  theme(axis.text = element_text(size=14,face = "bold"),axis.title=element_text(size=16,face="bold"))
+
+#Spearman correlation
+cor(AllSeqdf[substr(AllSeqdf$set,1,11)=="WD_controls",]$SlopeNorm2ptSD2,AllSeqdf[substr(AllSeqdf$set,1,11)=="WD_controls",]$WDdesignSlope,method = "spearman")
+
+#All WD10 Sequences 
+WD10df=FilteredEset[FilteredEset@featureData@data$set=="WD10",]@featureData@data
+WD10df$WDdesignSlope=WDdesign$slope[match(WD10df$aa_seq,WDdesign$aa_seq)]
+WD10df=na.omit(WD10df)
+
+#Percentage of sequences in each graph quadrant
+table(WD10df$SlopeNorm2ptSD2>0,WD10df$WDdesignSlope>0)
+Q1=round((158/1010)*100,1) #TopLeft
+Q2=round((192/1010)*100,1) #TopRight
+Q3=round((593/1010)*100,1) #BottomLeft
+Q4=round((67/1010)*100,1) #BottomRight
+
+ggplot(WD10df,aes(y=SlopeNorm2ptSD2,x=WDdesignSlope))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 0,color="red",linewidth=1.2)+
+  geom_smooth(method = lm,linewidth=2)+
+  geom_point(size=3)+
+  theme_classic()+
+  ylab("GAL4 Library Slope")+
+  xlab("WDdesign Library Slope")+
+  #ylim(-2,6)+
+  #xlim(-1,9)+
+  theme(axis.text = element_text(size=14,face = "bold"),axis.title=element_text(size=16,face="bold"))+
+  geom_text(aes(x=-1.7,y=3.7,label=Q1),size=5)+
+  geom_text(aes(x=0.3,y=3.7,label=Q2),size=5)+
+  geom_text(aes(x=-1.7,y=-2.7,label=Q3),size=5)+
+  geom_text(aes(x=0.3,y=-2.7,label=Q4),size=5)
+
+#Spearman correlation
+cor(WD10df$SlopeNorm2ptSD2,WD10df$WDdesignSlope,method = "spearman")
+
+#Functional WD10 Sequences
+FunctionalWD10df=filter(WD10df,SlopeNorm2ptSD2>0&WDdesignSlope>0)
+
+ggplot(filter(WD10df,SlopeNorm2ptSD2>0&WDdesignSlope>0,),aes(y=SlopeNorm2ptSD2,x=WDdesignSlope))+
+  geom_smooth(method = lm,linewidth=2)+
+  geom_point(size=3)+
+  theme_classic()+
+  ylab("GAL4 Library Slope")+
+  xlab("WDdesign Library Slope")+
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA))+
+  scale_x_continuous(expand = c(0, 0), limits = c(0, NA))+
+  theme(axis.text = element_text(size=14,face = "bold"),axis.title=element_text(size=16,face="bold"))
+
+#Spearman correlation
+cor(FunctionalWD10df$SlopeNorm2ptSD2,FunctionalWD10df$WDdesignSlope,method = "spearman")
+
+```

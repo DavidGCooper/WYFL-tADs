@@ -1,0 +1,1244 @@
+---
+title: "D10-Analysis"
+author: "David Cooper"
+date: "2023-03-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(pheatmap)
+library(limma)
+library(Biobase)
+library(MASS)
+library(caret)
+library(pROC)
+library(stringr)
+library(gridExtra)
+library(ggseqlogo)
+library(RColorBrewer)
+library(scales)
+source("ProcessingFunctions.R")
+
+```
+
+## WD10, LD10, FD10, and YD10 Sequences
+
+What is the distribution of functionality for sequences in each set?
+How many W, L, F, or Y residues are present in functional sequences?
+What is the distribution of functionality for sequences with specific number of W, L, F, or Y residues?
+What is the distribution of functionality for sequences with residues at each position?
+Can you predict functionality of a sequence based on residues present at each position?
+
+```{r Load and Prep Data}
+FilteredEset=readRDS("STARFilteredNormalizedEset.rds")
+D10Eset=FilteredEset[substr(FilteredEset@featureData@data$set,2,4)=="D10",]
+
+#Individual D10 Esets
+LD10Eset=FilteredEset[FilteredEset@featureData@data$set=="LD10",]
+WD10Eset=FilteredEset[FilteredEset@featureData@data$set=="WD10"&FilteredEset@featureData@data$aa_seq!="GGGGGGGGGGDDDDDDDDDD",]
+FD10Eset=FilteredEset[FilteredEset@featureData@data$set=="FD10",]
+YD10Eset=FilteredEset[FilteredEset@featureData@data$set=="YD10",]
+#Residue Counts
+fData(LD10Eset)$ResidueCount=str_count(LD10Eset@featureData@data$aa_seq,"L")
+fData(WD10Eset)$ResidueCount=str_count(WD10Eset@featureData@data$aa_seq,"W")
+fData(FD10Eset)$ResidueCount=str_count(FD10Eset@featureData@data$aa_seq,"F")
+fData(YD10Eset)$ResidueCount=str_count(YD10Eset@featureData@data$aa_seq,"Y")
+#Functional Sequences
+fData(LD10Eset)$Functional=LD10Eset@featureData@data$SlopeNorm2ptSD2>0
+fData(WD10Eset)$Functional=WD10Eset@featureData@data$SlopeNorm2ptSD2>0
+fData(FD10Eset)$Functional=FD10Eset@featureData@data$SlopeNorm2ptSD2>0
+fData(YD10Eset)$Functional=YD10Eset@featureData@data$SlopeNorm2ptSD2>0
+#Function Per Residue
+#WD10
+WD10fdata=FilteredEset[FilteredEset@featureData@data$set=="WD10"]@featureData@data%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2)
+WD10fdata$binary_stop=gsub("FALSE","die",gsub("TRUE","live",WD10fdata$SlopeNorm2ptSD2>0))
+#Create W1,D1,W2...D10 columns with 1s or 0s if there is or isn't a W or D present
+x=expand.grid(c('W','D'), 1:10)
+x$col=paste(x$Var1,x$Var2,sep = '')
+for(i in 1:nrow(x)){WD10fdata[,x$col[i]] <- 0}
+for(i in 1:nrow(WD10fdata)){
+  for(j in 11:20){
+    let=str_sub(WD10fdata$aa_seq[i],j,j)
+    col=paste(let,j-10,sep = '')
+    WD10fdata[i,col]=1
+  }
+}
+WD10fdata=WD10fdata%>%dplyr::select("id_number","aa_seq","SlopeNorm2ptSD2","binary_stop",starts_with("W"),starts_with("D"))
+#LD10
+LD10fdata=FilteredEset[FilteredEset@featureData@data$set=="LD10"]@featureData@data%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2)
+LD10fdata$binary_stop=gsub("FALSE","die",gsub("TRUE","live",LD10fdata$SlopeNorm2ptSD2>0))
+#Create L1,D1,L2...D10 columns with 1s or 0s if there is or isn't a L or D present
+x=expand.grid(c('L','D'), 1:10)
+x$col=paste(x$Var1,x$Var2,sep = '')
+for(i in 1:nrow(x)){LD10fdata[,x$col[i]] <- 0}
+for(i in 1:nrow(LD10fdata)){
+  for(j in 11:20){
+    let=str_sub(LD10fdata$aa_seq[i],j,j)
+    col=paste(let,j-10,sep = '')
+    LD10fdata[i,col]=1
+  }
+}
+LD10fdata=LD10fdata%>%dplyr::select("id_number","aa_seq","SlopeNorm2ptSD2","binary_stop",starts_with("L"),starts_with("D"))
+#FD10
+FD10fdata=FilteredEset[FilteredEset@featureData@data$set=="FD10"]@featureData@data%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2)
+FD10fdata$binary_stop=gsub("FALSE","die",gsub("TRUE","live",FD10fdata$SlopeNorm2ptSD2>0))
+#Create F1,D1,F2...D10 columns with 1s or 0s if there is or isn't a F or D present
+x=expand.grid(c('F','D'), 1:10)
+x$col=paste(x$Var1,x$Var2,sep = '')
+for(i in 1:nrow(x)){FD10fdata[,x$col[i]] <- 0}
+for(i in 1:nrow(FD10fdata)){
+  for(j in 11:20){
+    let=str_sub(FD10fdata$aa_seq[i],j,j)
+    col=paste(let,j-10,sep = '')
+    FD10fdata[i,col]=1
+  }
+}
+FD10fdata=FD10fdata%>%dplyr::select("id_number","aa_seq","SlopeNorm2ptSD2","binary_stop",starts_with("F"),starts_with("D"))
+#YD10
+YD10fdata=FilteredEset[FilteredEset@featureData@data$set=="YD10"]@featureData@data%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2)
+YD10fdata$binary_stop=gsub("FALSE","die",gsub("TRUE","live",YD10fdata$SlopeNorm2ptSD2>0))
+#Create Y1,D1,Y2...D10 columns with 1s or 0s if there is or isn't a Y or D present
+x=expand.grid(c('Y','D'), 1:10)
+x$col=paste(x$Var1,x$Var2,sep = '')
+for(i in 1:nrow(x)){YD10fdata[,x$col[i]] <- 0}
+for(i in 1:nrow(YD10fdata)){
+  for(j in 11:20){
+    let=str_sub(YD10fdata$aa_seq[i],j,j)
+    col=paste(let,j-10,sep = '')
+    YD10fdata[i,col]=1
+  }
+}
+YD10fdata=YD10fdata%>%dplyr::select("id_number","aa_seq","SlopeNorm2ptSD2","binary_stop",starts_with("Y"),starts_with("D"))
+
+```
+
+## Distribution of Function
+
+Box plots/Violin plots of each D10 set as a whole and split into groups based on number of residues in the sequence.
+
+```{r All D10 Distribution of Functionality}
+print("Percent Functional LD10 Sequences")
+mean(LD10Eset@featureData@data$SlopeNorm2ptSD2>=0)*100
+print("Percent Functional WD10 Sequences")
+mean(WD10Eset@featureData@data$SlopeNorm2ptSD2>=0)*100
+print("Percent Functional FD10 Sequences")
+mean(FD10Eset@featureData@data$SlopeNorm2ptSD2>=0)*100
+print("Percent Functional YD10 Sequences")
+mean(YD10Eset@featureData@data$SlopeNorm2ptSD2>=0)*100
+
+#Average Slope of Functional Sequences
+D10Favg=as.data.frame(filter(D10Eset@featureData@data,SlopeNorm2ptSD2>0)%>%group_by(set)%>%summarise(mean(SlopeNorm2ptSD2)))
+D10Favg$low=seq(0.9,3.9,1)
+D10Favg$high=seq(1.1,4.1,1)
+
+#Violin Plots
+ggplot(D10Eset@featureData@data,aes(x=set,y=SlopeNorm2ptSD2,fill=set))+
+  geom_violin(scale = "count",linewidth=1.2,width=0.4)+
+  theme_classic()+
+  labs(title="XD10 sets")+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("WD10","FD10","LD10","YD10"),labels=c("WD10","FD10","LD10","YD10"))+
+  scale_fill_manual(values = c("orange2","#f7cb77","yellow2","#cf8902"),limits=c("WD10","FD10","LD10","YD10"),breaks=c("WD10","FD10","LD10","YD10"),name="Sequence",labels=c("WD10","FD10","LD10","YD10"))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=D10Favg[3,3],y=D10Favg[3,2],xend=D10Favg[3,4],yend=D10Favg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=D10Favg[1,3],y=D10Favg[1,2],xend=D10Favg[1,4],yend=D10Favg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=D10Favg[2,3],y=D10Favg[2,2],xend=D10Favg[2,4],yend=D10Favg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=D10Favg[4,3],y=D10Favg[4,2],xend=D10Favg[4,4],yend=D10Favg[4,2]),color="blue",linewidth=1.2)+
+  geom_text(aes(x=1,y=7,label="34.3"),size=6)+
+  geom_text(aes(x=2,y=7,label="35.5"),size=6)+
+  geom_text(aes(x=3,y=7,label="22.0"),size=6)+
+  geom_text(aes(x=4,y=7,label="0.8"),size=6)
+
+filter(D10Eset@featureData@data,set=="WD10")%>%
+ggplot(aes(x=set,y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count",linewidth=1.2,width=0.4,fill="orange2")+
+  theme_classic()+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("WD10",""),labels=c("WD10",""))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=0.8,y=D10Favg[3,2],xend=1.2,yend=D10Favg[3,2]),color="blue",linewidth=1.2)+
+  geom_text(aes(x=0.7,y=7,label="34.3"),size=6)
+
+filter(D10Eset@featureData@data,set=="FD10")%>%
+ggplot(aes(x=set,y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count",linewidth=1.2,width=0.4,fill="#f7cb77")+
+  theme_classic()+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("FD10",""),labels=c("FD10",""))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=0.8,y=D10Favg[1,2],xend=1.2,yend=D10Favg[1,2]),color="blue",linewidth=1.2)+
+  geom_text(aes(x=0.7,y=7,label="35.5"),size=6)
+
+filter(D10Eset@featureData@data,set=="LD10")%>%
+ggplot(aes(x=set,y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count",linewidth=1.2,width=0.4,fill="yellow2")+
+  theme_classic()+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("LD10",""),labels=c("LD10",""))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=0.8,y=D10Favg[2,2],xend=1.2,yend=D10Favg[2,2]),color="blue",linewidth=1.2)+
+  geom_text(aes(x=0.7,y=7,label="22.0"),size=6)
+
+filter(D10Eset@featureData@data,set=="YD10")%>%
+ggplot(aes(x=set,y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count",linewidth=1.2,width=0.4,fill="#cf8902")+
+  theme_classic()+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("YD10"),labels=c("YD10"))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=0.8,y=D10Favg[4,2],xend=1.2,yend=D10Favg[4,2]),color="blue",linewidth=1.2)+
+  geom_text(aes(x=0.7,y=7,label="0.8"),size=6)
+
+```
+
+```{r WD10 Distribution of Functionality}
+#Average Slope of Functional Sequences
+WDFavg=as.data.frame(filter(WD10Eset@featureData@data,Functional==TRUE)%>%group_by(ResidueCount)%>%summarise(mean(SlopeNorm2ptSD2)))
+WDFavg$low=WDFavg$ResidueCount-0.3
+WDFavg$high=WDFavg$ResidueCount+0.3
+
+#Violin Plot
+ggplot(WD10Eset@featureData@data,aes(x=as.factor(ResidueCount),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.06,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="WD10")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=WDFavg[1,3],y=WDFavg[1,2],xend=WDFavg[1,4],yend=WDFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=WDFavg[2,3],y=WDFavg[2,2],xend=WDFavg[2,4],yend=WDFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=WDFavg[3,3],y=WDFavg[3,2],xend=WDFavg[3,4],yend=WDFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=WDFavg[4,3],y=WDFavg[4,2],xend=WDFavg[4,4],yend=WDFavg[4,2]),color="blue",linewidth=1.2)
+
+#Box Plot
+ggplot(WD10Eset@featureData@data,aes(x=as.factor(ResidueCount),y=SlopeNorm2ptSD2))+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="orange2")+
+  geom_jitter(size=0.5,width = 0.3)+
+  theme_classic()+
+  #labs(title="WD10")+
+  xlab("Number of W Residues")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_text(aes(x=4,y=7,label="17.6"),size=5)+
+  geom_text(aes(x=5,y=6.5,label="60.6"),size=5)+
+  geom_text(aes(x=6,y=7,label="65.7"),size=5)+
+  geom_text(aes(x=7,y=6.5,label="19.2"),size=5)
+
+#Box Plot with count line
+WDnum=as.data.frame(WD10Eset@featureData@data)%>%group_by(ResidueCount)%>%summarise(Function=sum(Functional==TRUE))
+WDnum$Group=rep("Counts",10)
+
+ggplot(WD10Eset@featureData@data,aes(x=as.factor(ResidueCount),y=SlopeNorm2ptSD2))+
+  geom_line(data = WDnum,mapping = aes(x=as.factor(ResidueCount),y=Function/25,group=Group),linewidth=1.2,color="grey")+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="orange2")+
+  geom_jitter(size=0.5,width = 0.3)+
+  theme_classic()+
+  labs(title="WD10")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7),sec.axis = sec_axis(~.*25, name="Functional Count",breaks = seq(0,175,25)))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        axis.text.y.right =element_text(size=14,face = "bold",color="grey") )+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_text(aes(x=4,y=7,label="17.6"),size=5)+
+  geom_text(aes(x=5,y=6.5,label="60.6"),size=5)+
+  geom_text(aes(x=6,y=7,label="65.7"),size=5)+
+  geom_text(aes(x=7,y=6.5,label="19.2"),size=5)
+
+```
+
+```{r LD10 Distribution of Functionality}
+#Average Slope of Functional Sequences
+LDFavg=as.data.frame(filter(LD10Eset@featureData@data,Functional==TRUE)%>%group_by(ResidueCount)%>%summarise(mean(SlopeNorm2ptSD2)))
+LDFavg$low=LDFavg$ResidueCount-0.3
+LDFavg$high=LDFavg$ResidueCount+0.3
+
+#Violin Plot
+ggplot(LD10Eset@featureData@data,aes(x=as.factor(ResidueCount),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.06,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="LD10")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=LDFavg[1,3],y=LDFavg[1,2],xend=LDFavg[1,4],yend=LDFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=LDFavg[2,3],y=LDFavg[2,2],xend=LDFavg[2,4],yend=LDFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=LDFavg[3,3],y=LDFavg[3,2],xend=LDFavg[3,4],yend=LDFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=LDFavg[4,3],y=LDFavg[4,2],xend=LDFavg[4,4],yend=LDFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=LDFavg[5,3],y=LDFavg[5,2],xend=LDFavg[5,4],yend=LDFavg[5,2]),color="blue",linewidth=1.2)
+
+#Box Plot
+ggplot(LD10Eset@featureData@data,aes(x=as.factor(ResidueCount),y=SlopeNorm2ptSD2))+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="yellow2")+
+  geom_jitter(size=0.5,width = 0.3)+
+  theme_classic()+
+  #labs(title="LD10")+
+  xlab("Number of L Residues")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_text(aes(x=3,y=6.5,label="0.8"),size=5)+
+  geom_text(aes(x=4,y=7,label="1.4"),size=5)+
+  geom_text(aes(x=5,y=6.5,label="29.4"),size=5)+
+  geom_text(aes(x=6,y=7,label="57.1"),size=5)+
+  geom_text(aes(x=7,y=6.5,label="22.5"),size=5)
+
+#Box Plot with count line
+LDnum=as.data.frame(LD10Eset@featureData@data)%>%group_by(ResidueCount)%>%summarise(Function=sum(Functional==TRUE))
+LDnum$Group=rep("Counts",10)
+
+ggplot(LD10Eset@featureData@data,aes(x=as.factor(ResidueCount),y=SlopeNorm2ptSD2))+
+  geom_line(data = LDnum,mapping = aes(x=as.factor(ResidueCount),y=Function/25,group=Group),linewidth=1.2,color="grey")+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="yellow2")+
+  geom_jitter(size=0.5,width = 0.3)+
+  theme_classic()+
+  labs(title="LD10")+
+  xlab("Number of L Residues")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7),sec.axis = sec_axis(~.*25, name="Functional Count",breaks = seq(0,175,25)))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        axis.text.y.right =element_text(size=14,face = "bold",color="grey") )+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_text(aes(x=3,y=6.5,label="0.8"),size=5)+
+  geom_text(aes(x=4,y=7,label="1.4"),size=5)+
+  geom_text(aes(x=5,y=6.5,label="29.4"),size=5)+
+  geom_text(aes(x=6,y=7,label="57.1"),size=5)+
+  geom_text(aes(x=7,y=6.5,label="22.5"),size=5)
+
+```
+
+```{r FD10 Distribution of Functionality}
+#Average Slope of Functional Sequences
+FDFavg=as.data.frame(filter(FD10Eset@featureData@data,Functional==TRUE)%>%group_by(ResidueCount)%>%summarise(mean(SlopeNorm2ptSD2)))
+FDFavg$low=FDFavg$ResidueCount-0.3
+FDFavg$high=FDFavg$ResidueCount+0.3
+
+#Violin Plot
+ggplot(FD10Eset@featureData@data,aes(x=as.factor(ResidueCount),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.06,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="FD10")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=FDFavg[1,3],y=FDFavg[1,2],xend=FDFavg[1,4],yend=FDFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=FDFavg[2,3],y=FDFavg[2,2],xend=FDFavg[2,4],yend=FDFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=FDFavg[3,3],y=FDFavg[3,2],xend=FDFavg[3,4],yend=FDFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=FDFavg[4,3],y=FDFavg[4,2],xend=FDFavg[4,4],yend=FDFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=FDFavg[5,3],y=FDFavg[5,2],xend=FDFavg[5,4],yend=FDFavg[5,2]),color="blue",linewidth=1.2)
+
+#Box Plot
+ggplot(FD10Eset@featureData@data,aes(x=as.factor(ResidueCount),y=SlopeNorm2ptSD2))+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="#f7cb77")+
+  geom_jitter(size=0.5,width = 0.3)+
+  theme_classic()+
+  #labs(title="FD10")+
+  xlab("Number of F Residues")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_text(aes(x=3,y=6.5,label="0.8"),size=5)+
+  geom_text(aes(x=4,y=7,label="19.1"),size=5)+
+  geom_text(aes(x=5,y=6.5,label="79.8"),size=5)+
+  geom_text(aes(x=6,y=7,label="56.2"),size=5)+
+  geom_text(aes(x=7,y=6.5,label="2.5"),size=5)
+
+#Box Plot with count line
+FDnum=as.data.frame(FD10Eset@featureData@data)%>%group_by(ResidueCount)%>%summarise(Function=sum(Functional==TRUE))
+FDnum$Group=rep("Counts",10)
+
+ggplot(FD10Eset@featureData@data,aes(x=as.factor(ResidueCount),y=SlopeNorm2ptSD2))+
+  geom_line(data = FDnum,mapping = aes(x=as.factor(ResidueCount),y=Function/25,group=Group),linewidth=1.2,color="grey")+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="#f7cb77")+
+  geom_jitter(size=0.5,width = 0.3)+
+  theme_classic()+
+  labs(title="FD10")+
+  xlab("Number of F Residues")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,8.2),sec.axis = sec_axis(~.*25, name="Functional Count",breaks = seq(0,205,25)))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        axis.text.y.right =element_text(size=14,face = "bold",color="grey") )+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_text(aes(x=3,y=6.5,label="0.8"),size=5)+
+  geom_text(aes(x=4,y=7,label="19.1"),size=5)+
+  geom_text(aes(x=5,y=6.5,label="79.8"),size=5)+
+  geom_text(aes(x=6,y=7,label="56.2"),size=5)+
+  geom_text(aes(x=7,y=6.5,label="2.5"),size=5)
+
+```
+
+```{r YD10 Distribution of Functionality}
+#Violin Plot
+ggplot(YD10Eset@featureData@data,aes(x=as.factor(ResidueCount),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.06,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="YD10")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+```
+
+```{r All D10 Functionality per number of residue}
+#WD10
+WDcounts=merge(as.data.frame(table(WD10Eset@featureData@data$ResidueCount)),
+      as.data.frame(table(WD10Eset[WD10Eset@featureData@data$Functional==TRUE]@featureData@data$ResidueCount)),
+      by = "Var1")
+WDcounts$Ratio=(WDcounts$Freq.y/WDcounts$Freq.x)*100
+WDcounts=dplyr::select(WDcounts,Var1,Ratio)
+
+#LD10
+LDcounts=merge(as.data.frame(table(LD10Eset@featureData@data$ResidueCount)),
+      as.data.frame(table(LD10Eset[LD10Eset@featureData@data$Functional==TRUE]@featureData@data$ResidueCount)),
+      by = "Var1")
+LDcounts$Ratio=(LDcounts$Freq.y/LDcounts$Freq.x)*100
+LDcounts=dplyr::select(LDcounts,Var1,Ratio)
+
+#FD10
+FDcounts=merge(as.data.frame(table(FD10Eset@featureData@data$ResidueCount)),
+      as.data.frame(table(FD10Eset[FD10Eset@featureData@data$Functional==TRUE]@featureData@data$ResidueCount)),
+      by = "Var1")
+FDcounts$Ratio=(FDcounts$Freq.y/FDcounts$Freq.x)*100
+FDcounts=dplyr::select(FDcounts,Var1,Ratio)
+
+#YD10
+YDcounts=merge(as.data.frame(table(YD10Eset@featureData@data$ResidueCount)),
+      as.data.frame(table(YD10Eset[YD10Eset@featureData@data$Functional==TRUE]@featureData@data$ResidueCount)),
+      by = "Var1")
+YDcounts$Ratio=(YDcounts$Freq.y/YDcounts$Freq.x)*100
+YDcounts=dplyr::select(YDcounts,Var1,Ratio)
+
+#Merge all _D10 % Functional per Residue
+X1=merge(WDcounts,LDcounts,by="Var1",all=TRUE,suffixes = c("WD","LD"))
+X2=merge(FDcounts,YDcounts,by="Var1",all=TRUE,suffixes = c("FD","YD"))
+D10FuncRes=merge(X1,X2,by="Var1",all=TRUE)
+D10FuncRes[is.na(D10FuncRes)]=0
+D10FuncRes[7:10,]=c(1,8,9,10,rep(0,16))
+D10FuncRes=dplyr::arrange(D10FuncRes,Var1)
+tidyr::pivot_longer(D10FuncRes,starts_with("R"))%>%ggplot(aes(x=Var1,y=value,fill=name))+
+  geom_col(position=position_dodge())+
+  theme_classic()+
+  xlab("Number of Residues")+
+  ylab("Percent Functional")+
+  theme(axis.text = element_text(size=12))+
+  scale_fill_discrete(labels=c('F','L','W','Y'))+
+  labs(fill="Residue",title = "_D10 Sets")
+
+```
+
+## Position Effect
+
+Line graphs of each D10 set for each residue across all ten positions.
+
+```{r Function per Residue}
+#WD10
+liveSum=colSums(WD10fdata[WD10fdata$binary_stop=="live",][,c(-1:-4,-25,-26)])
+dieSum=colSums(WD10fdata[WD10fdata$binary_stop=="die",][,c(-1:-4,-25,-26)])
+livePercent=liveSum/(liveSum+dieSum)*100
+plotWD=tibble(aa = c(rep('W',10), rep('D',10)),pos = c(1:10,1:10), check = names(livePercent),live_percent = livePercent)
+ggplot(plotWD)+
+  geom_smooth(aes(x=pos,y=live_percent,color=aa),se=FALSE,linewidth=2)+
+  scale_x_continuous(breaks = seq(10))+
+  scale_color_manual(values=c("red2","orange2"))+
+  theme_classic()+
+  #labs(title="WD10 Percent Functional vs Position")+
+  xlab("Residue Position")+
+  ylab("Percent Functional")+
+  scale_y_continuous(breaks = seq(15,45,5),limits = c(22,46.6))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.position = "none")+
+  geom_hline(yintercept = 34.3,color="black",linewidth=1.2)+
+  geom_text(aes(x=10.4,y=29,label="D"),size=5)+
+  geom_text(aes(x=10.4,y=40,label="W"),size=5)
+
+#LD10
+liveSum=colSums(LD10fdata[LD10fdata$binary_stop=="live",][,c(-1:-4,-25,-26)])
+dieSum=colSums(LD10fdata[LD10fdata$binary_stop=="die",][,c(-1:-4,-25,-26)])
+livePercent=liveSum/(liveSum+dieSum)*100
+plotLD=tibble(aa = c(rep('L',10), rep('D',10)),pos = c(1:10,1:10), check = names(livePercent),live_percent = livePercent)
+ggplot(plotLD)+
+  geom_smooth(aes(x=pos,y=live_percent,color=aa),se=FALSE,linewidth=2)+
+  scale_x_continuous(breaks = seq(10))+
+  scale_color_manual(values=c("red2","yellow2"))+
+  theme_classic()+
+  #labs(title="LD10 Percent Functional vs Position")+
+  xlab("Residue Position")+
+  ylab("Percent Functional")+
+  scale_y_continuous(breaks = seq(15,30,5),limits = c(14,30))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.position = "none")+
+  geom_hline(yintercept = 22,color="black",linewidth=1.2)+
+  geom_text(aes(x=10.4,y=17,label="D"),size=5)+
+  geom_text(aes(x=10.4,y=27,label="L"),size=5)  
+
+#FD10
+liveSum=colSums(FD10fdata[FD10fdata$binary_stop=="live",][,c(-1:-4,-25,-26)])
+dieSum=colSums(FD10fdata[FD10fdata$binary_stop=="die",][,c(-1:-4,-25,-26)])
+livePercent=liveSum/(liveSum+dieSum)*100
+plotFD=tibble(aa = c(rep('F',10), rep('D',10)),pos = c(1:10,1:10), check = names(livePercent),live_percent = livePercent)
+ggplot(plotFD)+
+  geom_smooth(aes(x=pos,y=live_percent,color=aa),se=FALSE,linewidth=2)+
+  scale_x_continuous(breaks = seq(10))+
+  scale_color_manual(values=c("red2","#f7cb77"))+
+  theme_classic()+
+  #labs(title="FD10 Percent Functional vs Position")+
+  xlab("Residue Position")+
+  ylab("Percent Functional")+
+  scale_y_continuous(breaks = seq(25,45,5),limits = c(23,48))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.position = "none")+
+  geom_hline(yintercept = 35.5,color="black",linewidth=1.2)+
+  geom_text(aes(x=10.4,y=29,label="D"),size=5)+
+  geom_text(aes(x=10.4,y=43,label="F"),size=5)
+
+#YD10
+#Too few functional sequences
+
+```
+
+```{r Function Per Residue Regression}
+#WD10 ML Regression
+print("Average average area under the curve for WD10")
+run_5ml(WD10fdata%>%dplyr::select('binary_stop',starts_with('W')), my_lambda = 10^seq(-9,-3,length = 50)) %>% mean()
+#WD10 Linear Regression
+Fit=glm(binary_stop=="live"~.,WD10fdata[,seq(4,14)],family=binomial)
+Fit2=lm(SlopeNorm2ptSD2~.,WD10fdata[,c(3,seq(5,14))])
+summary(Fit)
+summary(Fit2)
+
+#LD10 ML Regression
+print("Average average area under the curve for LD10")
+run_5ml(LD10fdata%>%dplyr::select('binary_stop',starts_with('L')), my_lambda = 10^seq(-9,-3,length = 50)) %>% mean()
+#LD10 Linear Regression
+Fit=glm(binary_stop=="live"~.,LD10fdata[,seq(4,14)],family=binomial)
+Fit2=lm(SlopeNorm2ptSD2~.,LD10fdata[,c(3,seq(5,14))])
+summary(Fit)
+summary(Fit2)
+
+#FD10 ML Regression
+print("Average average area under the curve for FD10")
+run_5ml(FD10fdata%>%dplyr::select('binary_stop',starts_with('F')), my_lambda = 10^seq(-9,-3,length = 50)) %>% mean()
+#FD10 Linear Regression
+Fit=glm(binary_stop=="live"~.,FD10fdata[,seq(4,14)],family=binomial)
+Fit2=lm(SlopeNorm2ptSD2~.,FD10fdata[,c(3,seq(5,14))])
+summary(Fit)
+summary(Fit2)
+
+#YD10 Cannot be analyzed due to a very low number of functional sequences
+
+```
+
+## Function Clustering
+
+Functionality of sequences grouped by their largest cluster of W, F, or L residues
+
+```{r WD10 Clusters}
+fData(WD10Eset)$ClusterLengthW=sapply(WD10Eset@featureData@data$aa_seq,Clustering,Res="W")
+fData(WD10Eset)$ClusterLengthD=sapply(WD10Eset@featureData@data$aa_seq,Clustering,Res="D")
+
+ggplot(WD10Eset@featureData@data,aes(x=as.factor(ClusterLengthW),y=SlopeNorm2ptSD2))+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="orange2")+
+  geom_jitter(size=0.5,width = 0.3)+
+  theme_classic()+
+  labs(title="WD10")+
+  xlab("Size of Largest W-Cluster")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+#Box plots with count line
+WDnumClust=as.data.frame(WD10Eset@featureData@data)%>%group_by(ClusterLengthW)%>%summarise(Function=sum(Functional==TRUE))
+WDnumClust$Group=rep("Counts",10)
+
+ggplot(WD10Eset@featureData@data,aes(x=as.factor(ClusterLengthW),y=SlopeNorm2ptSD2))+
+  geom_line(data = WDnumClust,mapping = aes(x=as.factor(ClusterLengthW),y=Function/25,group=Group),linewidth=1.2,color="grey")+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="orange2")+
+  geom_jitter(size=0.5,width = 0.3)+
+  theme_classic()+
+  labs(title="WD10")+
+  xlab("Size of Largest W-Cluster")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7),sec.axis = sec_axis(~.*25, name="Functional Count",breaks = seq(0,175,25)))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        axis.text.y.right =element_text(size=14,face = "bold",color="grey") )+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+```
+
+```{r FD10 Clusters}
+fData(FD10Eset)$ClusterLengthF=sapply(FD10Eset@featureData@data$aa_seq,Clustering,Res="F")
+fData(FD10Eset)$ClusterLengthD=sapply(FD10Eset@featureData@data$aa_seq,Clustering,Res="D")
+
+ggplot(FD10Eset@featureData@data,aes(x=as.factor(ClusterLengthF),y=SlopeNorm2ptSD2))+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="#f7cb77")+
+  geom_jitter(size=0.5,width = 0.3)+
+  theme_classic()+
+  labs(title="FD10")+
+  xlab("Size of Largest F-Cluster")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+#Box plots with count line
+FDnumClust=as.data.frame(FD10Eset@featureData@data)%>%group_by(ClusterLengthF)%>%summarise(Function=sum(Functional==TRUE))
+FDnumClust$Group=rep("Counts",10)
+
+ggplot(FD10Eset@featureData@data,aes(x=as.factor(ClusterLengthF),y=SlopeNorm2ptSD2))+
+  geom_line(data = FDnumClust,mapping = aes(x=as.factor(ClusterLengthF),y=Function/30,group=Group),linewidth=1.2,color="grey")+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="#f7cb77")+
+  geom_jitter(size=0.5,width = 0.3)+
+  theme_classic()+
+  labs(title="FD10")+
+  xlab("Size of Largest F-Cluster")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7),sec.axis = sec_axis(~.*30, name="Functional Count",breaks = seq(0,175,25)))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        axis.text.y.right =element_text(size=14,face = "bold",color="grey") )+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+```
+
+```{r LD10 Clusters}
+fData(LD10Eset)$ClusterLengthL=sapply(LD10Eset@featureData@data$aa_seq,Clustering,Res="L")
+fData(LD10Eset)$ClusterLengthD=sapply(LD10Eset@featureData@data$aa_seq,Clustering,Res="D")
+
+ggplot(LD10Eset@featureData@data,aes(x=as.factor(ClusterLengthL),y=SlopeNorm2ptSD2))+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="yellow2")+
+  geom_jitter(size=0.5,width = 0.3)+
+  theme_classic()+
+  labs(title="LD10")+
+  xlab("Size of Largest L-Cluster")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+#Box plots with count line
+LDnumClust=as.data.frame(LD10Eset@featureData@data)%>%group_by(ClusterLengthL)%>%summarise(Function=sum(Functional==TRUE))
+LDnumClust$Group=rep("Counts",10)
+
+ggplot(LD10Eset@featureData@data,aes(x=as.factor(ClusterLengthL),y=SlopeNorm2ptSD2))+
+  geom_line(data = LDnumClust,mapping = aes(x=as.factor(ClusterLengthL),y=Function/25,group=Group),linewidth=1.2,color="grey")+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="yellow2")+
+  geom_jitter(size=0.5,width = 0.3)+
+  theme_classic()+
+  labs(title="LD10")+
+  xlab("Size of Largest L-Cluster")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7),sec.axis = sec_axis(~.*25, name="Functional Count",breaks = seq(0,175,25)))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        axis.text.y.right =element_text(size=14,face = "bold",color="grey") )+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+```
+
+## Patterning Parameter
+
+Analyze clustering using patterning parameter from "perfect" intermixed to "patchy" clustered
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7297187/
+
+OmegaAro "Patterning Parameter" Cluster score (1 = max cluster, 0 = intermixed)
+
+```{r Patterning Parameter}
+#WD10 All sequences
+WD10fdata$ShortSeq=gsub("G","",WD10fdata$aa_seq)
+WD10fdata$OmegaAro=OmegaAro(WD10fdata$ShortSeq,Residue="W")
+
+ggplot(WD10fdata)+
+  geom_point(aes(x=OmegaAro,y=SlopeNorm2ptSD2),fill="orange2",shape=21,size=3)+
+  theme_classic()+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  ylab("Slope")+
+  xlab("Clustering (Patterning Parameter)")+
+  #labs(title = "All WD10 Sequences")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        legend.text = element_text(size=12,color="black"),
+        legend.title = element_text(size=14,face = "bold",color="black"),
+        legend.position = c(0.8, 0.8))
+
+cor(WD10fdata$SlopeNorm2ptSD2,WD10fdata$OmegaAro,method = "spearman")
+
+#LD10 All sequences
+LD10fdata$ShortSeq=gsub("G","",LD10fdata$aa_seq)
+LD10fdata$OmegaAro=OmegaAro(LD10fdata$ShortSeq,Residue="L")
+LD10fdata$Lcount=str_count(LD10fdata$ShortSeq,"L")
+LD10fdata$motifLDDLL=grepl("LDDLL",LD10fdata$aa_seq)
+LD10fdata$motifLLDLL=grepl("LLDLL",LD10fdata$aa_seq)
+
+ggplot(LD10fdata)+
+  geom_point(aes(x=OmegaAro,y=SlopeNorm2ptSD2),fill="yellow2",shape=21,size=3)+
+  theme_classic()+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  ylab("Slope")+
+  xlab("Clustering (Patterning Parameter)")+
+  #labs(title = "All LD10 Sequences")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        legend.text = element_text(size=12,color="black"),
+        legend.title = element_text(size=14,face = "bold",color="black"),
+        legend.position = c(0.8, 0.8))
+
+ggplot(LD10fdata)+
+  geom_point(aes(x=OmegaAro,y=SlopeNorm2ptSD2,fill=as.factor(motifLDDLL)),shape=21,size=3)+
+  theme_classic()+
+  scale_fill_manual(name="LDDLL Motif",limits=c("TRUE","FALSE"),values=c("red2","yellow2"),labels=c("Has Motif","No Motif"))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  ylab("Slope")+
+  xlab("Clustering (Patterning Parameter)")+
+  #labs(title = "All LD10 Sequences")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        legend.text = element_text(size=12,color="black"),
+        legend.title = element_text(size=14,face = "bold",color="black"),
+        legend.position = c(0.8, 0.8))
+
+cor(LD10fdata$SlopeNorm2ptSD2,LD10fdata$OmegaAro,method = "spearman")
+
+#LD10 balanced 6L 4D set
+filter(LD10fdata,Lcount==6)%>%
+ggplot()+
+  geom_point(aes(x=OmegaAro,y=SlopeNorm2ptSD2,fill=as.factor(motifLDDLL)),shape=21,size=3)+
+  theme_classic()+
+  scale_fill_manual(name="LDDLL Motif",limits=c("TRUE","FALSE"),values=c("red2","yellow2"),labels=c("Has Motif","No Motif"))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+  
+  ylab("Slope")+
+  xlab("Clustering (Patterning Parameter)")+  
+  #labs(title = "Balanced LD10 Sequences (6L)")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        legend.text = element_text(size=12,color="black"),
+        legend.title = element_text(size=14,face = "bold",color="black"),
+        legend.position = c(0.8, 0.8))
+
+#LD10 LXDLL motif set
+filter(LD10fdata,motifLDDLL==TRUE | motifLLDLL==TRUE)%>%
+ggplot()+
+  geom_point(aes(x=OmegaAro,y=SlopeNorm2ptSD2),shape=21,size=3,fill="yellow2")+
+  theme_classic()+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+  
+  ylab("Slope")+
+  xlab("Clustering (Patterning Parameter)")+  
+  #labs(title = "Balanced LD10 Sequences (6L)")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        legend.text = element_text(size=12,color="black"),
+        legend.title = element_text(size=14,face = "bold",color="black"),
+        legend.position = c(0.8, 0.8))
+
+cor(filter(LD10fdata,motifLDDLL==TRUE | motifLLDLL==TRUE)$SlopeNorm2ptSD2,filter(LD10fdata,motifLDDLL==TRUE | motifLLDLL==TRUE)$OmegaAro,method = "spearman")
+
+#FD10 All sequences
+FD10fdata$ShortSeq=gsub("G","",FD10fdata$aa_seq)
+FD10fdata$OmegaAro=OmegaAro(FD10fdata$ShortSeq,Residue="F")
+
+ggplot(FD10fdata)+
+  geom_point(aes(x=OmegaAro,y=SlopeNorm2ptSD2),fill="#f7cb77",shape=21,size=3)+
+  theme_classic()+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  ylab("Slope")+
+  xlab("Clustering (Patterning Parameter)")+
+  #labs(title = "All FD10 Sequences")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        legend.text = element_text(size=12,color="black"),
+        legend.title = element_text(size=14,face = "bold",color="black"),
+        legend.position = c(0.8, 0.8))
+
+cor(FD10fdata$SlopeNorm2ptSD2,FD10fdata$OmegaAro,method = "spearman")
+
+```
+
+## LD10 Functional Motifs
+
+```{r LD10 Mini-Motifs}
+#LD10 Mini-Motifs
+LDregDF=as.data.frame(LD10Eset@featureData@data)%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2,ResidueCount,Functional)
+LDregDF$motifLXXLL=grepl("L..LL",LDregDF$aa_seq)
+LDregDF$motifLXDLL=grepl("L.DLL",LDregDF$aa_seq)
+LDregDF$motifDLXDLL=grepl("DL.DLL",LDregDF$aa_seq)
+LDregDF$motifLDLXDLL=grepl("LDL.DLL",LDregDF$aa_seq)
+LDregDF$motifLDLDDLL=grepl("LDLDDLL",LDregDF$aa_seq)
+LDregDF$AbsoluteL=abs(LDregDF$ResidueCount-6)
+LDregDF$motifLDDLL=grepl("LDDLL",LDregDF$aa_seq)
+LDregDF$motifLDLDDLL=grepl("LDLDDLL",LDregDF$aa_seq)
+LDregDF$motifLLDDLDL=grepl("LLDDLDL",LDregDF$aa_seq)
+LDregDF$motifLLDXLDL=grepl("LLD.LDL",LDregDF$aa_seq)
+
+#Regression
+#Slope~Lcount+L..LL+L.DLL+DL.DLL+LDL.DLL
+FitLD10=lm(SlopeNorm2ptSD2~.,LDregDF[,c(3,10,6,7,8,9,11)])
+summary(FitLD10)
+
+#All Motifs
+longLDregDF=pivot_longer(LDregDF,cols = starts_with("motif"))
+ggplot(longLDregDF[longLDregDF$value==TRUE,],aes(x=name,y=SlopeNorm2ptSD2))+
+  geom_boxplot(linewidth=1,outlier.color = NA)+
+  geom_jitter(size=0.7,width = 0.3,height = 0)+
+  theme_classic()+
+  labs(title="All Motifs")+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=longLDregDF[c(1,2,5,3,4,6,8,7),]$name,labels=gsub("motif","",longLDregDF[c(1,2,5,3,4,6,8,7),]$name))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black",angle = 90, vjust = 0.5, hjust=1),axis.title=element_text(size=16,face="bold"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 6.5, color="black",linewidth=1.2)
+
+#LDLXDLL and LDDLL Motif
+ggplot(LDregDF,aes(x=motifLDLXDLL,y=SlopeNorm2ptSD2,fill=motifLDDLL))+
+  geom_boxplot(linewidth=1)+
+  #geom_jitter(size=0.7,width = 0.3,height = 0)+
+  theme_classic()+
+  labs(title="LDLXDLL Motif")+
+  xlab("Has LDLXDLL Motif")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+```
+
+```{r LDL.DLL Subset Distribution}
+#Prepare data frame with motifs
+LDmotifDF=as.data.frame(LD10Eset@featureData@data)%>%dplyr::select(id_number,aa_seq,SlopeNorm2ptSD2,ResidueCount,Functional)
+LDmotifDF$motifLDLXDLL=grepl("LDL.DLL",LDmotifDF$aa_seq)
+LDmotifDF$motifDDLXDLL=grepl("DDL.DLL",LDmotifDF$aa_seq)
+LDmotifDF$motifLLLXDLL=grepl("LLL.DLL",LDmotifDF$aa_seq)
+LDmotifDF$motifLDDXDLL=grepl("LDD.DLL",LDmotifDF$aa_seq)
+LDmotifDF$motifLDLXLLL=grepl("LDL.LLL",LDmotifDF$aa_seq)
+LDmotifDF$motifLDLXDDL=grepl("LDL.DDL",LDmotifDF$aa_seq)
+LDmotifDF$motifLDLXDLD=grepl("LDL.DLD",LDmotifDF$aa_seq)
+
+#Prepare data frame for graph
+LDmotifGraph=data.frame()
+x=filter(LDmotifDF,motifLDLXDLL==TRUE)$SlopeNorm2ptSD2
+H=rep("motifLDLXDLL",length(x))
+LDmotifGraph[nrow(LDmotifGraph)+1:length(x),1:2]=c(H,x)
+colnames(LDmotifGraph)=c("motif","slope")
+
+x=filter(LDmotifDF,motifDDLXDLL==TRUE)$SlopeNorm2ptSD2
+H=rep("motifDDLXDLL",length(x))
+LDmotifGraph[nrow(LDmotifGraph)+1:length(x),1:2]=c(H,x)
+
+x=filter(LDmotifDF,motifLLLXDLL==TRUE)$SlopeNorm2ptSD2
+H=rep("motifLLLXDLL",length(x))
+LDmotifGraph[nrow(LDmotifGraph)+1:length(x),1:2]=c(H,x)
+
+x=filter(LDmotifDF,motifLDDXDLL==TRUE)$SlopeNorm2ptSD2
+H=rep("motifLDDXDLL",length(x))
+LDmotifGraph[nrow(LDmotifGraph)+1:length(x),1:2]=c(H,x)
+
+x=filter(LDmotifDF,motifLDLXLLL==TRUE)$SlopeNorm2ptSD2
+H=rep("motifLDLXLLL",length(x))
+LDmotifGraph[nrow(LDmotifGraph)+1:length(x),1:2]=c(H,x)
+
+x=filter(LDmotifDF,motifLDLXDDL==TRUE)$SlopeNorm2ptSD2
+H=rep("motifLDLXDDL",length(x))
+LDmotifGraph[nrow(LDmotifGraph)+1:length(x),1:2]=c(H,x)
+
+x=filter(LDmotifDF,motifLDLXDLD==TRUE)$SlopeNorm2ptSD2
+H=rep("motifLDLXDLD",length(x))
+LDmotifGraph[nrow(LDmotifGraph)+1:length(x),1:2]=c(H,x)
+
+#Create Graph
+ggplot(LDmotifGraph,aes(x=motif,y=as.numeric(slope),group=motif))+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="yellow2")+
+  geom_jitter(width = 0.3,height = 0)+
+  theme_classic()+
+  #labs(title="LDLXDLL Motif Derivatives")+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("motifLDLXDLL","motifDDLXDLL","motifLLLXDLL","motifLDDXDLL","motifLDLXLLL","motifLDLXDDL","motifLDLXDLD"), labels=c("LDLXDLL", 
+               expression(paste(underline(bold("D"))," DLXDLL")), 
+               expression(paste("L ",underline(bold("L"))," LXDLL")),
+               expression(paste("LD ",underline(bold("D"))," XDLL")), 
+               expression(paste("LDLX ",underline(bold("L"))," LL")), 
+               expression(paste("LDLXD ",underline(bold("D"))," L")),
+               expression(paste("LDLXDL ",underline(bold("D"))))))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+  
+  theme(axis.text.x = element_text(size=14,face = "bold",color = "black",angle = 90, vjust = 0.5, hjust=1),
+        axis.text.y = element_text(size=14,face = "bold",color = "black"),
+        axis.title=element_text(size=16,face="bold",color="black"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 1.5, color="black",linewidth=1.2)
+
+```
+
+```{r LDL.DLL and LLD.LDL Motifs}
+LD10fdata$motifLXXLL=grepl("L..LL",LD10fdata$aa_seq)
+LD10fdata$motifLXDLL=grepl("L.DLL",LD10fdata$aa_seq)
+LD10fdata$motifDLXDLL=grepl("DL.DLL",LD10fdata$aa_seq)
+LD10fdata$motifLDLXDLL=grepl("LDL.DLL",LD10fdata$aa_seq)
+LD10fdata$motifLLDXLDL=grepl("LLD.LDL",LD10fdata$aa_seq)
+LD10fdata$motifLDDLL=grepl("LDDLL",LD10fdata$aa_seq)
+LD10fdata$motifLLDDL=grepl("LLDDL",LD10fdata$aa_seq)
+
+#LDLXDLL Motif
+ggplot(LD10fdata,aes(x=motifLDLXDLL,y=SlopeNorm2ptSD2))+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="yellow2")+
+  geom_jitter(width = 0.3,height = 0)+
+  theme_classic()+
+  #labs(title="LDLXDLL Motif")+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("FALSE","TRUE"),labels=c("Absent","Present"))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),
+        axis.title=element_text(size=16,face="bold",color = "black"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+#LLDXLDL Motif
+ggplot(LD10fdata,aes(x=motifLLDXLDL,y=SlopeNorm2ptSD2))+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="yellow2")+
+  geom_jitter(width = 0.3,height = 0)+
+  theme_classic()+
+  #labs(title="LLDXLDL Motif")+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("FALSE","TRUE"),labels=c("Absent","Present"))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),
+        axis.title=element_text(size=16,face="bold",color = "black"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+```
+
+## Sequence Inversion
+
+```{r Sequence Inversion}
+#WD10
+TopWD10=filter(WD10fdata,SlopeNorm2ptSD2>1) 
+TopWD10Seq=substr(TopWD10[,2],11,20)
+RevWD10Seq=sapply(TopWD10Seq, ReversedString)
+RevWD10=filter(WD10fdata,aa_seq %in% paste("GGGGGGGGGG",RevWD10Seq,sep = ""))
+
+#FD10
+TopFD10=filter(FD10fdata,SlopeNorm2ptSD2>1) 
+TopFD10Seq=substr(TopFD10[,2],11,20)
+RevFD10Seq=sapply(TopFD10Seq, ReversedString)
+RevFD10=filter(FD10fdata,aa_seq %in% paste("GGGGGGGGGG",RevFD10Seq,sep = "")) 
+
+#LD10
+TopLD10=filter(LD10fdata,SlopeNorm2ptSD2>1) 
+TopLD10Seq=substr(TopLD10[,2],11,20)
+RevLD10Seq=sapply(TopLD10Seq, ReversedString)
+RevLD10=filter(LD10fdata,aa_seq %in% paste("GGGGGGGGGG",RevLD10Seq,sep = ""))
+
+#Graph
+RevGraph=data.frame()
+x=TopFD10$SlopeNorm2ptSD2
+H=rep("TopFD10",length(x))
+RevGraph[nrow(RevGraph)+1:length(x),1:2]=c(H,x)
+colnames(RevGraph)=c("group","slope")
+x=RevFD10$SlopeNorm2ptSD2
+H=rep("RevFD10",length(x))
+RevGraph[nrow(RevGraph)+1:length(x),1:2]=c(H,x)
+x=TopWD10$SlopeNorm2ptSD2
+H=rep("TopWD10",length(x))
+RevGraph[nrow(RevGraph)+1:length(x),1:2]=c(H,x)
+x=RevWD10$SlopeNorm2ptSD2
+H=rep("RevWD10",length(x))
+RevGraph[nrow(RevGraph)+1:length(x),1:2]=c(H,x)
+x=TopLD10$SlopeNorm2ptSD2
+H=rep("TopLD10",length(x))
+RevGraph[nrow(RevGraph)+1:length(x),1:2]=c(H,x)
+x=RevLD10$SlopeNorm2ptSD2
+H=rep("RevLD10",length(x))
+RevGraph[nrow(RevGraph)+1:length(x),1:2]=c(H,x)
+
+ggplot(RevGraph,aes(x=group,y=as.numeric(slope),group=group))+
+  geom_boxplot(linewidth=1,outlier.color = NA)+
+  geom_jitter(size=0.7,width = 0.3,height = 0)+
+  theme_classic()+
+  labs(title="XD10 Top and Rev Sequences")+
+  xlab("")+
+  ylab("Slope")+
+theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  scale_x_discrete(limits=c("TopWD10","RevWD10","TopFD10","RevFD10","TopLD10","RevLD10"))
+
+```
+
+## LD10 Motif Rules
+
+```{r LD10 motifs Rules}
+#Prepare columns for LDDLL and LLDLL motifs
+LD10fdata$motifLDDLL=grepl("LDDLL",LD10fdata$aa_seq)
+LD10fdata$motifLLDLL=grepl("LLDLL",LD10fdata$aa_seq)
+LD10fdata$LCounts=rowSums(LD10fdata[,5:14])
+LD10fdata$motifLDDLLpos=nchar(gsub(".*LDDLL","",LD10fdata$aa_seq))
+LD10fdata$motifLLDLLpos=nchar(gsub(".*LLDLL","",LD10fdata$aa_seq))
+
+#Prepare data frame for graphs
+LDDLL=filter(LD10fdata,motifLDDLL==TRUE & motifLLDLL==FALSE)%>%
+  dplyr::select(aa_seq,SlopeNorm2ptSD2,LCounts,motifLDDLLpos)%>%
+  rename(motifPos=motifLDDLLpos)
+LDDLL$Motif=rep("motifLDDLL",nrow(LDDLL))
+
+LLDLL=filter(LD10fdata,motifLDDLL==FALSE & motifLLDLL==TRUE)%>%
+  dplyr::select(aa_seq,SlopeNorm2ptSD2,LCounts,motifLLDLLpos)%>%
+  rename(motifPos=motifLLDLLpos)
+LLDLL$Motif=rep("motifLLDLL",nrow(LLDLL))
+
+LD10motifGraph=rbind(LDDLL,LLDLL)
+
+
+#Distance from N-term
+ggplot(LD10motifGraph,aes(x=Motif,y=SlopeNorm2ptSD2,fill=factor(motifPos,c("5","4","3","2","1","0"))))+
+  geom_boxplot(outlier.color = NA)+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_point(size=1.5,position = position_jitterdodge(jitter.width = 0.3,dodge.width = 0.75))+
+  scale_x_discrete(limits=c("motifLDDLL","motifLLDLL"),labels=c("LDDLL","LLDLL"))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+  
+  scale_fill_manual(values = brewer.pal(name="YlOrRd",n=9)[c(9,8,6,4,2,1)],
+                    limits=factor(5:0,levels = c("5","4","3","2","1","0")),
+                    breaks=factor(5:0,levels = c("5","4","3","2","1","0")),
+                    name="Distance\nfrom\nN-term.",
+                    labels=c("5","4","3","2","1","0"))+
+  ylab("Slope")+
+  xlab("")+
+  #labs(title="All Sequences: Distance from N-term")+
+  theme_classic()+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),
+        axis.title=element_text(size=16,face="bold",color = "black"),
+        legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12))
+
+
+#Number of L residues
+ggplot(LD10motifGraph,aes(x=Motif,y=SlopeNorm2ptSD2,fill=as.factor(LCounts)))+
+  geom_boxplot(outlier.color = NA)+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_point(size=1.5,position = position_jitterdodge(jitter.width = 0.3,dodge.width = 0.75))+
+  scale_x_discrete(limits=c("motifLDDLL","motifLLDLL"),labels=c("LDDLL","LLDLL"))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  #scale_fill_discrete(name="Number of\nL Residues")+
+  scale_fill_manual(values = brewer.pal(name="YlOrRd",n=9)[c(1,2,4,6,7,8,9)],
+                    limits=factor(3:9),
+                    breaks=factor(3:9),
+                    name="Number of\nL residues",
+                    labels=factor(3:9))+  
+  ylab("Slope")+
+  xlab("")+
+  theme_classic()+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),
+        axis.title=element_text(size=16,face="bold",color = "black"),
+        legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position = c(0.9,0.7))
+
+
+#Function per Residue
+#LXDLL subset Per Residue Graph
+LXDLL=filter(LD10fdata,motifLDDLL==TRUE | motifLLDLL==TRUE)
+FuncLXDLL=mean(LXDLL$binary_stop=="live")*100
+
+liveSum=colSums(LXDLL[LXDLL$binary_stop=="live",][,5:24])
+dieSum=colSums(LXDLL[LXDLL$binary_stop=="die",][,5:24])
+livePercent=liveSum/(liveSum+dieSum)*100
+plotLDmotifLXDLL=tibble(aa = c(rep('L',10), rep('D',10)),pos = c(1:10,1:10), check = names(livePercent),live_percent = livePercent)
+
+ggplot(plotLDmotifLXDLL)+
+  geom_smooth(aes(x=pos,y=live_percent,color=aa),se=FALSE,linewidth=2)+
+  scale_x_continuous(breaks = seq(10))+
+  scale_color_manual(values=c("yellow2","red2"),
+                     limits=c("L","D"),
+                     breaks=c("L","D"),name="Residue")+
+  theme_classic()+
+  #labs(title="LXDLL motif Percent Functional vs Position")+
+  xlab("Residue Position")+
+  ylab("Percent Functional")+
+  scale_y_continuous(breaks = seq(40,60,5),limits = c(FuncLXDLL-12,FuncLXDLL+12))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")+
+  geom_hline(yintercept = FuncLXDLL,color="black",linewidth=1.2)+
+  geom_text(aes(x=10.4,y=50.5,label="L"),size=5)+
+  geom_text(aes(x=10.4,y=47,label="D"),size=5)
+
+#LXDLL subset w/ motif masked Per Residue Graph
+LXDLL$MaskedSeq=gsub("L.DLL","XXXXX",LXDLL$ShortSeq)
+
+x=expand.grid(c('L','D'), 1:10)
+x$col=paste(x$Var1,x$Var2,sep = '')
+for(i in 1:nrow(x)){LXDLL[,x$col[i]] <- 0}
+for(i in 1:nrow(LXDLL)){
+  for(j in 1:10){
+    let=str_sub(LXDLL$MaskedSeq[i],j,j)
+    col=paste(let,j,sep = '')
+    LXDLL[i,col]=1
+  }
+}
+
+FuncLXDLL=mean(LXDLL$binary_stop=="live")*100
+
+liveSum=colSums(LXDLL[LXDLL$binary_stop=="live",][,5:24])
+dieSum=colSums(LXDLL[LXDLL$binary_stop=="die",][,5:24])
+livePercent=liveSum/(liveSum+dieSum)*100
+plotLDmotifLXDLL=tibble(aa = c(rep('L',10), rep('D',10)),pos = c(1:10,1:10), check = names(livePercent),live_percent = livePercent)
+
+ggplot(plotLDmotifLXDLL)+
+  geom_smooth(aes(x=pos,y=live_percent,color=aa),se=FALSE,linewidth=2)+
+  scale_x_continuous(breaks = seq(10))+
+  scale_color_manual(values=c("yellow2","red2"),
+                     limits=c("L","D"),
+                     breaks=c("L","D"),name="Residue")+
+  theme_classic()+
+  #labs(title="LXDLL motif Percent Functional vs Position")+
+  xlab("Residue Position")+
+  ylab("Percent Functional")+
+  scale_y_continuous(breaks = seq(20,70,10),limits = c(20,70))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")+
+  geom_hline(yintercept = FuncLXDLL,color="black",linewidth=1.2)+
+  geom_text(aes(x=10.4,y=54,label="L"),size=5)+
+  geom_text(aes(x=10.4,y=47,label="D"),size=5)
+
+```
+
+## Helicity
+
+Does helicity predict functionality?
+Helicity prediction using SPOT-1D. 
+
+```{r Helical Predictions SPOT1D}
+#Prep Spot1D helix table
+Spot1D=read.csv("tAD_library_with_SPOT1D_predictions.csv")
+FindMaxHelix=function(probs) max(as.numeric(str_split(probs,pattern = ",")[[1]]))
+Spot1D$MaxHelix=unlist(lapply(Spot1D$helicity_probability,FindMaxHelix))
+Spot1D=na.omit(Spot1D)
+Spot1D$HelixCount=nchar(Spot1D$ss3)-nchar(gsub("H","",Spot1D$ss3))
+
+LD10fdata$MaxHelix=Spot1D$MaxHelix[match(LD10fdata$id_number,Spot1D$ID)]
+LD10fdata$HelixCount=Spot1D$HelixCount[match(LD10fdata$id_number,Spot1D$ID)]
+LD10fdata$motifLXXLL=grepl("L..LL",LD10fdata$aa_seq)
+LD10fdata$motifLDLXDLL=grepl("LDL.DLL",LD10fdata$aa_seq)
+LD10fdata$motifLLDXLDL=grepl("LLD.LDL",LD10fdata$aa_seq)
+LD10fdata$motifLDDLL=grepl("LDDLL",LD10fdata$aa_seq)
+LD10fdata$motifLLDDL=grepl("LLDDL",LD10fdata$aa_seq)
+
+#Scatter Plots
+ggplot(filter(LD10fdata,motifLDLXDLL==TRUE),aes(x=MaxHelix,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 0.5,color="red",linewidth=1.2)+
+  geom_point(size=2,color="blue")+
+  theme_classic()+
+  labs(title = "LDLXDLL")
+
+ggplot(filter(LD10fdata,motifLLDXLDL==TRUE),aes(x=MaxHelix,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 0.5,color="red",linewidth=1.2)+
+  geom_point(size=2,color="red")+
+  theme_classic()+
+  labs(title = "LLDXLDL")
+
+ggplot(filter(LD10fdata,motifLXXLL==TRUE),aes(x=MaxHelix,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 0.5,color="red",linewidth=1.2)+
+  geom_point(size=2,color="green")+
+  theme_classic()+
+  labs(title = "LXXLL")
+
+ggplot(filter(LD10fdata,motifLDDLL==TRUE & motifLLDDL==FALSE),aes(x=MaxHelix,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 0.5,color="red",linewidth=1.2)+
+  geom_point(size=2,color="navy")+
+  theme_classic()+
+  labs(title = "LDDLL")
+
+ggplot(filter(LD10fdata,motifLLDDL==TRUE & motifLDDLL==FALSE),aes(x=MaxHelix,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 0.5,color="red",linewidth=1.2)+
+  geom_point(size=2,color="darkred")+
+  theme_classic()+
+  labs(title = "LLDDL")
+
+#Predicted number of helix residues vs function
+ggplot(filter(LD10fdata,motifLLDDL==TRUE & motifLDDLL==FALSE),aes(x=HelixCount,y=SlopeNorm2ptSD2,group=HelixCount))+
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="darkred")+
+  geom_jitter(size=2,width = 0.3)+
+  theme_classic()+
+  labs(title = "LLDDL")
+
+```
+
+## Sequence Logos
+
+```{r Sequence Logos}
+#Color Scheme
+cs1 = make_col_scheme(chars=c('W', 'F', 'L', 'Y', 'D', 'G'), 
+                      groups=c('W', 'F', 'L', 'Y', 'D', 'G'), 
+                      cols=c("orange2","#f7cb77","#d6cf00","#cf8902",alpha("red2",0.6),"pink2"))
+
+#LD10
+LD10fdata$SeqNoG=substr(LD10fdata$aa_seq,11,20)
+LD10fdata$LCounts=rowSums(LD10fdata[,5:14])
+#Top 5% (n=52)
+ggseqlogo(LD10fdata[LD10fdata$SlopeNorm2ptSD2>4.41,]$SeqNoG, col_scheme=cs1,method="prob",color="black",linewidth=0.05)
+#Functional (n=225)
+ggseqlogo(LD10fdata[LD10fdata$SlopeNorm2ptSD2>0,]$SeqNoG, col_scheme=cs1,method="prob",color="black",linewidth=0.05)
+#Bottom 5% (n=52)
+ggseqlogo(LD10fdata[LD10fdata$SlopeNorm2ptSD2<(-1.94),]$SeqNoG, col_scheme=cs1,method="prob",color="black",linewidth=0.05)
+
+#WD10
+WD10fdata$SeqNoG=substr(WD10fdata$aa_seq,11,20)
+WD10fdata$WCounts=rowSums(WD10fdata[,5:14])
+#Top 5% (n=53)
+ggseqlogo(WD10fdata[WD10fdata$SlopeNorm2ptSD2>2.45,]$SeqNoG, col_scheme=cs1,method="prob",color="black",linewidth=0.05)
+#Functional (n=350)
+ggseqlogo(WD10fdata[WD10fdata$SlopeNorm2ptSD2>0,]$SeqNoG, col_scheme=cs1,method="prob",color="black",linewidth=0.05)
+#Bottom 5% (n=52)
+ggseqlogo(WD10fdata[WD10fdata$SlopeNorm2ptSD2<(-2.068),]$SeqNoG, col_scheme=cs1,method="prob",color="black",linewidth=0.05)
+
+#FD10
+FD10fdata$SeqNoG=substr(FD10fdata$aa_seq,11,20)
+FD10fdata$FCounts=rowSums(FD10fdata[,5:14])
+#Top 5% (n=52)
+ggseqlogo(FD10fdata[FD10fdata$SlopeNorm2ptSD2>3.87,]$SeqNoG, col_scheme=cs1,method="prob",color="black",linewidth=0.05)
+#Functional (n=363)
+ggseqlogo(FD10fdata[FD10fdata$SlopeNorm2ptSD2>0,]$SeqNoG, col_scheme=cs1,method="prob",color="black",linewidth=0.05)
+#Bottom 5% (n=54)
+ggseqlogo(FD10fdata[FD10fdata$SlopeNorm2ptSD2<(-2.02),]$SeqNoG, col_scheme=cs1,method="prob",color="black",linewidth=0.05)
+
+
+#LDLXDLL Motif
+LDDLLMEME=read.table("LD10top50MemeForLogo.txt")
+LDDLLMEME$CropSeq=str_sub(LDDLLMEME$V1,5,11)
+ggseqlogo(LDDLLMEME$CropSeq, col_scheme=cs1,method="prob",color="black",linewidth=0.05)
+ggseqlogo(LDDLLMEME$CropSeq, col_scheme=cs1,color="black",linewidth=0.05)
+
+```

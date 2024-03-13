@@ -1,0 +1,858 @@
+---
+title: "WYFL-Analysis"
+author: "David Cooper"
+date: "2023-03-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(pheatmap)
+library(limma)
+library(Biobase)
+library(MASS)
+library(caret)
+library(pROC)
+library(stringr)
+library(ggseqlogo)
+source("ProcessingFunctions.R")
+
+```
+
+## WYFL Extended, Collapsed, and wd5 Sequences
+
+What is the distribution of functionality for sequences in each set?
+How many W, L, F, or Y residues are present in functional sequences?
+What is the functionality of groups excluding a single amino acid?
+What is the distribution of functionality for sequences with residues at each position?
+What is the functionality of DDDWWWWWDD, DDDLLLLLDD, etc. sequences (baseline)?
+Can you predict functionality of a sequence based on residues present at each position?
+
+```{r Load and Prep Data}
+FilteredEset=readRDS("STARFilteredNormalizedEset.rds")
+#Add extra sequence field for controls where it is missing
+FilteredEset@featureData@data[FilteredEset@featureData@data$id_number %in% c(seq(194,215,3),2501),]$extra="WWWWW"
+FilteredEset@featureData@data[FilteredEset@featureData@data$id_number %in% c(3958,3524),]$extra="FFFFF"
+FilteredEset@featureData@data[FilteredEset@featureData@data$id_number %in% c(4981,4547),]$extra="LLLLL"
+FilteredEset@featureData@data[FilteredEset@featureData@data$id_number %in% c(6004,5570),]$extra="YYYYY"
+
+WYFLEset=FilteredEset[FilteredEset@featureData@data$set=="mixing_WYFL_collapsed"|FilteredEset@featureData@data$set=="mixing_WYFL_extended"|FilteredEset@featureData@data$set=="mixing_WYFL_wd5"|FilteredEset@featureData@data$id_number %in% c(seq(194,215,3),3958,4981,6004,2501,3524,4547,5570),]
+
+#Extended (Flanked)
+WYFLexfdata=WYFLEset[WYFLEset@featureData@data$set=="mixing_WYFL_extended"|WYFLEset@featureData@data$id_number %in% c(seq(194,215,3),3958,4981,6004),]@featureData@data%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+WYFLexfdata$binary_stop=gsub("FALSE","die",gsub("TRUE","live",WYFLexfdata$SlopeNorm2ptSD2>0))
+x=expand.grid(c('W','Y','F','L'), 1:5)
+x$col=paste(x$Var1,x$Var2,sep = '')
+for(i in 1:nrow(x)){WYFLexfdata[,x$col[i]] <- 0}
+for(i in 1:nrow(WYFLexfdata)){
+  for(j in 1:5){
+    let=str_sub(WYFLexfdata$extra[i],j,j)
+    col=paste(let,j,sep = '')
+    WYFLexfdata[i,col]=1
+  }
+}
+WYFLexfdata=WYFLexfdata%>%dplyr::select("id_number","aa_seq","extra","SlopeNorm2ptSD2","binary_stop",starts_with("W"),starts_with("L"),starts_with("F"),starts_with("Y"))
+WYFLexCounts=WYFLexfdata[,1:5]
+WYFLexCounts$Wsum=rowSums(WYFLexfdata[,6:10])
+WYFLexCounts$Lsum=rowSums(WYFLexfdata[,11:15])
+WYFLexCounts$Fsum=rowSums(WYFLexfdata[,16:20])
+WYFLexCounts$Ysum=rowSums(WYFLexfdata[,21:25])
+WYFLexCounts$Group=rep("ex",nrow(WYFLexCounts))
+
+#Collapsed (Intermixed)
+WYFLcolfdata=WYFLEset[WYFLEset@featureData@data$set=="mixing_WYFL_collapsed"|WYFLEset@featureData@data$id_number %in% c(2501,3524,4547,5570),]@featureData@data%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+WYFLcolfdata$binary_stop=gsub("FALSE","die",gsub("TRUE","live",WYFLcolfdata$SlopeNorm2ptSD2>0))
+x=expand.grid(c('W','Y','F','L'), 1:5)
+x$col=paste(x$Var1,x$Var2,sep = '')
+for(i in 1:nrow(x)){WYFLcolfdata[,x$col[i]] <- 0}
+for(i in 1:nrow(WYFLcolfdata)){
+  for(j in 1:5){
+    let=str_sub(WYFLcolfdata$extra[i],j,j)
+    col=paste(let,j,sep = '')
+    WYFLcolfdata[i,col]=1
+  }
+}
+WYFLcolfdata=WYFLcolfdata%>%dplyr::select("id_number","aa_seq","extra","SlopeNorm2ptSD2","binary_stop",starts_with("W"),starts_with("L"),starts_with("F"),starts_with("Y"))
+WYFLcolCounts=WYFLcolfdata[,1:5]
+WYFLcolCounts$Wsum=rowSums(WYFLcolfdata[,6:10])
+WYFLcolCounts$Lsum=rowSums(WYFLcolfdata[,11:15])
+WYFLcolCounts$Fsum=rowSums(WYFLcolfdata[,16:20])
+WYFLcolCounts$Ysum=rowSums(WYFLcolfdata[,21:25])
+WYFLcolCounts$Group=rep("col",nrow(WYFLcolCounts))
+
+#wd5 (Amphipathic Helix)
+WYFLwd5fdata=WYFLEset[WYFLEset@featureData@data$set=="mixing_WYFL_wd5",]@featureData@data%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+WYFLwd5fdata$binary_stop=gsub("FALSE","die",gsub("TRUE","live",WYFLwd5fdata$SlopeNorm2ptSD2>0))
+x=expand.grid(c('W','Y','F','L'), 1:5)
+x$col=paste(x$Var1,x$Var2,sep = '')
+for(i in 1:nrow(x)){WYFLwd5fdata[,x$col[i]] <- 0}
+for(i in 1:nrow(WYFLwd5fdata)){
+  for(j in 1:5){
+    let=str_sub(WYFLwd5fdata$extra[i],j,j)
+    col=paste(let,j,sep = '')
+    WYFLwd5fdata[i,col]=1
+  }
+}
+WYFLwd5fdata=WYFLwd5fdata%>%dplyr::select("id_number","aa_seq","extra","SlopeNorm2ptSD2","binary_stop",starts_with("W"),starts_with("L"),starts_with("F"),starts_with("Y"))
+WYFLwd5Counts=WYFLwd5fdata[,1:5]
+WYFLwd5Counts$Wsum=rowSums(WYFLwd5fdata[,6:10])
+WYFLwd5Counts$Lsum=rowSums(WYFLwd5fdata[,11:15])
+WYFLwd5Counts$Fsum=rowSums(WYFLwd5fdata[,16:20])
+WYFLwd5Counts$Ysum=rowSums(WYFLwd5fdata[,21:25])
+WYFLwd5Counts$Group=rep("wd5",nrow(WYFLwd5Counts))
+
+WYFLCounts=bind_rows(WYFLexCounts,WYFLcolCounts,WYFLwd5Counts)
+
+```
+
+## WYFL Controls
+
+Intermixed and flanked sequence 5 residue controls can be found in the _D10 Sets
+Flanked:
+WD10 GGGGGGGGGGDDDWWWWWDD = seq(194,215,3)
+FD10 GGGGGGGGGGDDDFFFFFDD = 3958
+LD10 GGGGGGGGGGDDDLLLLLDD = 4981
+YD10 GGGGGGGGGGDDDYYYYYDD = 6004
+Intermixed:
+WD10 GGGGGGGGGGDWDWDWDWDW = 2501
+FD10 GGGGGGGGGGDFDFDFDFDF = 3524
+LD10 GGGGGGGGGGDLDLDLDLDL = 4547
+YD10 GGGGGGGGGGDYDYDYDYDY = 5570
+wd5:
+WGDGWGDGWGDGWGDGWGDG = 8292
+FGDGFGDGFGDGFGDGFGDG = 8974
+LGDGLGDGLGDGLGDGLGDG = 9315
+YGDGYGDGYGDGYGDGYGDG = 8633
+
+```{r Flanked and Intermixed Single Residue Controls}
+#Flanked
+DXDcontrols=as.data.frame(FilteredEset@featureData@data)%>%filter(id_number %in% c(seq(194,215,3),3958,4981,6004))%>%
+  dplyr::select(aa_seq,set,SlopeNorm2ptSD2)
+DXDcontrols[12,]=c("GGGGGGGGGGDDDWWWWWDD","WD10",mean(DXDcontrols$SlopeNorm2ptSD2[1:8]))
+DXDcontrols=DXDcontrols[c(12,9,10,11),]
+DXDcontrols$Residue=c("W","F","L","Y")
+#Plot
+ggplot(DXDcontrols)+
+  geom_col(aes(x=factor(Residue,levels=c("W","F","L","Y")),y=as.numeric(SlopeNorm2ptSD2)),fill=c("orange2","#f7cb77","yellow2","#cf8902"),color="black")+
+  theme_classic()+
+  #labs(title="WYFL Flanked")+
+  xlab("")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+#Intermixed
+DXDXcontrols=as.data.frame(FilteredEset@featureData@data)%>%filter(id_number %in% c(2501,3524,4547,5570))%>%
+  dplyr::select(aa_seq,set,SlopeNorm2ptSD2)
+DXDXcontrols$Residue=c("W","F","L","Y")
+#Plot
+ggplot(DXDXcontrols)+
+  geom_col(aes(x=factor(Residue,levels=c("W","F","L","Y")),y=as.numeric(SlopeNorm2ptSD2)),fill=c("orange2","#f7cb77","yellow2","#cf8902"),color="black")+
+  theme_classic()+
+  #labs(title="WYFL Intermixed")+
+  xlab("")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+#Amphipathic Helix
+wd5controls=as.data.frame(FilteredEset@featureData@data)%>%filter(id_number %in% c(8292,8633,8974,9315))%>%
+  dplyr::select(aa_seq,set,SlopeNorm2ptSD2)
+wd5controls=wd5controls[c(1,3,4,2),]
+wd5controls$Residue=c("W","F","L","Y")
+#plot
+ggplot(wd5controls)+
+  geom_col(aes(x=factor(Residue,levels=c("W","F","L","Y")),y=as.numeric(SlopeNorm2ptSD2)),fill=c("orange2","#f7cb77","yellow2","#cf8902"),color="black")+
+  theme_classic()+
+  #labs(title="WYFL wd5")+
+  xlab("")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+```
+
+## Distribution of Function
+
+Box plots/Violin plots of each WYFL set as a whole and split into groups based on number of residues in the sequence.
+
+```{r Distribution of Functionality}
+print("Percent Functional WYFL Extended Sequences")
+mean(WYFLexfdata$SlopeNorm2ptSD2>=0)*100
+print("Percent Functional WYFL Collapsed Sequences")
+mean(WYFLcolfdata$SlopeNorm2ptSD2>=0)*100
+print("Percent Functional WYFL wd5 Sequences")
+mean(WYFLwd5fdata$SlopeNorm2ptSD2>=0)*100
+
+#Slope of W controls
+WYFLwcontrols=data.frame(set=c("mixing_WYFL_collapsed","mixing_WYFL_extended","mixing_WYFL_wd5"),Slope=as.numeric(c(DXDXcontrols[1,3],DXDcontrols[1,3],wd5controls[1,3])),low=seq(0.7,2.7,1),high=seq(1.3,3.3,1))
+
+#Average Slope of Functional Sequences
+WYFLFavg=as.data.frame(filter(WYFLEset@featureData@data,SlopeNorm2ptSD2>0)%>%group_by(set)%>%summarise(mean(SlopeNorm2ptSD2)))%>%filter(set %in% c("mixing_WYFL_collapsed","mixing_WYFL_extended","mixing_WYFL_wd5"))
+WYFLFavg$low=seq(0.9,2.9,1)
+WYFLFavg$high=seq(1.1,3.1,1)
+
+#Violin Plots
+ggplot(WYFLEset@featureData@data,aes(x=set,y=SlopeNorm2ptSD2,fill=set))+
+  geom_violin(scale = "count",linewidth=1.2,width=0.4)+
+  theme_classic()+
+  labs(title="WYFL sets")+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("mixing_WYFL_extended","mixing_WYFL_collapsed","mixing_WYFL_wd5"),labels=c("Flanked","Intermixed","Amphipathic"))+
+  scale_fill_manual(values = c("darkred","navy","darkgoldenrod2"),limits=c("mixing_WYFL_extended","mixing_WYFL_collapsed","mixing_WYFL_wd5"),breaks=c("mixing_WYFL_extended","mixing_WYFL_collapsed","mixing_WYFL_wd5"),name="Sequence",labels=c("Flanked","Intermixed","Amphipathic"))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  #geom_segment(aes(x=WYFLwcontrols[1,3],y=WYFLwcontrols[2,2],xend=WYFLwcontrols[1,4],yend=WYFLwcontrols[2,2]),color="green",linewidth=1.2)+
+  #geom_segment(aes(x=WYFLwcontrols[2,3],y=WYFLwcontrols[1,2],xend=WYFLwcontrols[2,4],yend=WYFLwcontrols[1,2]),color="green",linewidth=1.2)+
+  #geom_segment(aes(x=WYFLwcontrols[3,3],y=WYFLwcontrols[3,2],xend=WYFLwcontrols[3,4],yend=WYFLwcontrols[3,2]),color="green",linewidth=1.2)+
+  geom_segment(aes(x=WYFLFavg[1,3],y=WYFLFavg[2,2],xend=WYFLFavg[1,4],yend=WYFLFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=WYFLFavg[2,3],y=WYFLFavg[1,2],xend=WYFLFavg[2,4],yend=WYFLFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=WYFLFavg[3,3],y=WYFLFavg[3,2],xend=WYFLFavg[3,4],yend=WYFLFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_text(aes(x=1,y=7,label="47.2"),size=6)+
+  geom_text(aes(x=2,y=7,label="57.4"),size=6)+
+  geom_text(aes(x=3,y=7,label="16.2"),size=6)
+
+filter(WYFLEset@featureData@data,set=="mixing_WYFL_extended")%>%
+ggplot(aes(x=set,y=SlopeNorm2ptSD2,fill=set))+
+  geom_violin(scale = "count",linewidth=1.2,width=0.4,fill="darkred")+
+  theme_classic()+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("mixing_WYFL_extended",""),labels=c("Flanked",""))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=0.8,y=WYFLFavg[2,2],xend=1.2,yend=WYFLFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_text(aes(x=0.7,y=7,label="47.2"),size=6)
+
+filter(WYFLEset@featureData@data,set=="mixing_WYFL_collapsed")%>%
+ggplot(aes(x=set,y=SlopeNorm2ptSD2,fill=set))+
+  geom_violin(scale = "count",linewidth=1.2,width=0.4,fill="navy")+
+  theme_classic()+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("mixing_WYFL_collapsed",""),labels=c("Intermixed",""))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=0.8,y=WYFLFavg[1,2],xend=1.2,yend=WYFLFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_text(aes(x=0.7,y=7,label="57.4"),size=6)
+
+filter(WYFLEset@featureData@data,set=="mixing_WYFL_wd5")%>%
+ggplot(aes(x=set,y=SlopeNorm2ptSD2,fill=set))+
+  geom_violin(scale = "count",linewidth=1.2,width=0.4,fill="darkgoldenrod2")+
+  theme_classic()+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("mixing_WYFL_wd5",""),labels=c("Amphipathic",""))+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=0.8,y=WYFLFavg[3,2],xend=1.2,yend=WYFLFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_text(aes(x=0.7,y=7,label="16.2"),size=6)
+
+```
+
+```{r Extended (Flanked) Per Residue Functionality}
+#W Residues
+exWFavg=as.data.frame(filter(WYFLexCounts,binary_stop=="live")%>%group_by(Wsum)%>%summarise(mean(SlopeNorm2ptSD2)))
+exWFavg$low=exWFavg$Wsum+0.7
+exWFavg$high=exWFavg$Wsum+1.3
+
+ggplot(WYFLexCounts,aes(x=as.factor(Wsum),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.1,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="WYFL flanked W residues")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=exWFavg[1,3],y=exWFavg[1,2],xend=exWFavg[1,4],yend=exWFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exWFavg[2,3],y=exWFavg[2,2],xend=exWFavg[2,4],yend=exWFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exWFavg[3,3],y=exWFavg[3,2],xend=exWFavg[3,4],yend=exWFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exWFavg[4,3],y=exWFavg[4,2],xend=exWFavg[4,4],yend=exWFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exWFavg[5,3],y=exWFavg[5,2],xend=exWFavg[5,4],yend=exWFavg[5,2]),color="blue",linewidth=1.2)
+
+#L Residues
+exLFavg=as.data.frame(filter(WYFLexCounts,binary_stop=="live")%>%group_by(Lsum)%>%summarise(mean(SlopeNorm2ptSD2)))
+exLFavg$low=exLFavg$Lsum+0.7
+exLFavg$high=exLFavg$Lsum+1.3
+
+ggplot(WYFLexCounts,aes(x=as.factor(Lsum),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.1,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="WYFL flanked L residues")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=exLFavg[1,3],y=exLFavg[1,2],xend=exLFavg[1,4],yend=exLFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exLFavg[2,3],y=exLFavg[2,2],xend=exLFavg[2,4],yend=exLFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exLFavg[3,3],y=exLFavg[3,2],xend=exLFavg[3,4],yend=exLFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exLFavg[4,3],y=exLFavg[4,2],xend=exLFavg[4,4],yend=exLFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exLFavg[5,3],y=exLFavg[5,2],xend=exLFavg[5,4],yend=exLFavg[5,2]),color="blue",linewidth=1.2)
+
+#F Residues
+exFFavg=as.data.frame(filter(WYFLexCounts,binary_stop=="live")%>%group_by(Fsum)%>%summarise(mean(SlopeNorm2ptSD2)))
+exFFavg$low=exFFavg$Fsum+0.7
+exFFavg$high=exFFavg$Fsum+1.3
+
+ggplot(WYFLexCounts,aes(x=as.factor(Fsum),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.1,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="WYFL flanked F residues")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=exFFavg[1,3],y=exFFavg[1,2],xend=exFFavg[1,4],yend=exFFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exFFavg[2,3],y=exFFavg[2,2],xend=exFFavg[2,4],yend=exFFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exFFavg[3,3],y=exFFavg[3,2],xend=exFFavg[3,4],yend=exFFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exFFavg[4,3],y=exFFavg[4,2],xend=exFFavg[4,4],yend=exFFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exFFavg[5,3],y=exFFavg[5,2],xend=exFFavg[5,4],yend=exFFavg[5,2]),color="blue",linewidth=1.2)
+
+#Y Residues
+exYFavg=as.data.frame(filter(WYFLexCounts,binary_stop=="live")%>%group_by(Ysum)%>%summarise(mean(SlopeNorm2ptSD2)))
+exYFavg$low=exYFavg$Ysum+0.7
+exYFavg$high=exYFavg$Ysum+1.3
+
+ggplot(WYFLexCounts,aes(x=as.factor(Ysum),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.1,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="WYFL flanked Y residues")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=exYFavg[1,3],y=exYFavg[1,2],xend=exYFavg[1,4],yend=exYFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exYFavg[2,3],y=exYFavg[2,2],xend=exYFavg[2,4],yend=exYFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exYFavg[3,3],y=exYFavg[3,2],xend=exYFavg[3,4],yend=exYFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exYFavg[4,3],y=exYFavg[4,2],xend=exYFavg[4,4],yend=exYFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=exYFavg[5,3],y=exYFavg[5,2],xend=exYFavg[5,4],yend=exYFavg[5,2]),color="blue",linewidth=1.2)
+
+```
+
+```{r Collapsed (Intermixed) Per Residue Functionality}
+#W Residues
+colWFavg=as.data.frame(filter(WYFLcolCounts,binary_stop=="live")%>%group_by(Wsum)%>%summarise(mean(SlopeNorm2ptSD2)))
+colWFavg$low=colWFavg$Wsum+0.7
+colWFavg$high=colWFavg$Wsum+1.3
+
+ggplot(WYFLcolCounts,aes(x=as.factor(Wsum),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.1,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="WYFL intermixed W residues")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=colWFavg[1,3],y=colWFavg[1,2],xend=colWFavg[1,4],yend=colWFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colWFavg[2,3],y=colWFavg[2,2],xend=colWFavg[2,4],yend=colWFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colWFavg[3,3],y=colWFavg[3,2],xend=colWFavg[3,4],yend=colWFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colWFavg[4,3],y=colWFavg[4,2],xend=colWFavg[4,4],yend=colWFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colWFavg[5,3],y=colWFavg[5,2],xend=colWFavg[5,4],yend=colWFavg[5,2]),color="blue",linewidth=1.2)
+
+#L Residues
+colLFavg=as.data.frame(filter(WYFLcolCounts,binary_stop=="live")%>%group_by(Lsum)%>%summarise(mean(SlopeNorm2ptSD2)))
+colLFavg$low=colLFavg$Lsum+0.7
+colLFavg$high=colLFavg$Lsum+1.3
+
+ggplot(WYFLcolCounts,aes(x=as.factor(Lsum),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.1,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="WYFL intermixed L residues")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=colLFavg[1,3],y=colLFavg[1,2],xend=colLFavg[1,4],yend=colLFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colLFavg[2,3],y=colLFavg[2,2],xend=colLFavg[2,4],yend=colLFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colLFavg[3,3],y=colLFavg[3,2],xend=colLFavg[3,4],yend=colLFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colLFavg[4,3],y=colLFavg[4,2],xend=colLFavg[4,4],yend=colLFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colLFavg[5,3],y=colLFavg[5,2],xend=colLFavg[5,4],yend=colLFavg[5,2]),color="blue",linewidth=1.2)
+
+#F Residues
+colFFavg=as.data.frame(filter(WYFLcolCounts,binary_stop=="live")%>%group_by(Fsum)%>%summarise(mean(SlopeNorm2ptSD2)))
+colFFavg$low=colFFavg$Fsum+0.7
+colFFavg$high=colFFavg$Fsum+1.3
+
+ggplot(WYFLcolCounts,aes(x=as.factor(Fsum),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.1,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="WYFL intermixed F residues")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=colFFavg[1,3],y=colFFavg[1,2],xend=colFFavg[1,4],yend=colFFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colFFavg[2,3],y=colFFavg[2,2],xend=colFFavg[2,4],yend=colFFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colFFavg[3,3],y=colFFavg[3,2],xend=colFFavg[3,4],yend=colFFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colFFavg[4,3],y=colFFavg[4,2],xend=colFFavg[4,4],yend=colFFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colFFavg[5,3],y=colFFavg[5,2],xend=colFFavg[5,4],yend=colFFavg[5,2]),color="blue",linewidth=1.2)
+
+#Y Residues
+colYFavg=as.data.frame(filter(WYFLcolCounts,binary_stop=="live")%>%group_by(Ysum)%>%summarise(mean(SlopeNorm2ptSD2)))
+colYFavg$low=colYFavg$Ysum+0.7
+colYFavg$high=colYFavg$Ysum+1.3
+
+ggplot(WYFLcolCounts,aes(x=as.factor(Ysum),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.1,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="WYFL intermixed Y residues")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=colYFavg[1,3],y=colYFavg[1,2],xend=colYFavg[1,4],yend=colYFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colYFavg[2,3],y=colYFavg[2,2],xend=colYFavg[2,4],yend=colYFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colYFavg[3,3],y=colYFavg[3,2],xend=colYFavg[3,4],yend=colYFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colYFavg[4,3],y=colYFavg[4,2],xend=colYFavg[4,4],yend=colYFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=colYFavg[5,3],y=colYFavg[5,2],xend=colYFavg[5,4],yend=colYFavg[5,2]),color="blue",linewidth=1.2)
+
+```
+
+```{r wd5 (Amphipathic Helix) Per Residue Functionality}
+#W Residues
+wd5WFavg=as.data.frame(filter(WYFLwd5Counts,binary_stop=="live")%>%group_by(Wsum)%>%summarise(mean(SlopeNorm2ptSD2)))
+wd5WFavg$low=wd5WFavg$Wsum+0.7
+wd5WFavg$high=wd5WFavg$Wsum+1.3
+
+ggplot(WYFLwd5Counts[WYFLwd5Counts$Wsum<5,],aes(x=as.factor(Wsum),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.05,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="WYFL wd5 W residues")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=wd5WFavg[1,3],y=wd5WFavg[1,2],xend=wd5WFavg[1,4],yend=wd5WFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5WFavg[2,3],y=wd5WFavg[2,2],xend=wd5WFavg[2,4],yend=wd5WFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5WFavg[3,3],y=wd5WFavg[3,2],xend=wd5WFavg[3,4],yend=wd5WFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5WFavg[4,3],y=wd5WFavg[4,2],xend=wd5WFavg[4,4],yend=wd5WFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5WFavg[5,3],y=wd5WFavg[5,2],xend=wd5WFavg[5,4],yend=wd5WFavg[5,2]),color="blue",linewidth=1.2)
+
+#L Residues
+wd5LFavg=as.data.frame(filter(WYFLwd5Counts,binary_stop=="live")%>%group_by(Lsum)%>%summarise(mean(SlopeNorm2ptSD2)))
+wd5LFavg$low=wd5LFavg$Lsum+0.7
+wd5LFavg$high=wd5LFavg$Lsum+1.3
+
+ggplot(WYFLwd5Counts[WYFLwd5Counts$Lsum<5,],aes(x=as.factor(Lsum),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.05,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="WYFL wd5 L residues")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=wd5LFavg[1,3],y=wd5LFavg[1,2],xend=wd5LFavg[1,4],yend=wd5LFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5LFavg[2,3],y=wd5LFavg[2,2],xend=wd5LFavg[2,4],yend=wd5LFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5LFavg[3,3],y=wd5LFavg[3,2],xend=wd5LFavg[3,4],yend=wd5LFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5LFavg[4,3],y=wd5LFavg[4,2],xend=wd5LFavg[4,4],yend=wd5LFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5LFavg[5,3],y=wd5LFavg[5,2],xend=wd5LFavg[5,4],yend=wd5LFavg[5,2]),color="blue",linewidth=1.2)
+
+#F Residues
+wd5FFavg=as.data.frame(filter(WYFLwd5Counts,binary_stop=="live")%>%group_by(Fsum)%>%summarise(mean(SlopeNorm2ptSD2)))
+wd5FFavg$low=wd5FFavg$Fsum+0.7
+wd5FFavg$high=wd5FFavg$Fsum+1.3
+
+ggplot(WYFLwd5Counts[WYFLwd5Counts$Fsum<5,],aes(x=as.factor(Fsum),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.05,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="WYFL wd5 F residues")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=wd5FFavg[1,3],y=wd5FFavg[1,2],xend=wd5FFavg[1,4],yend=wd5FFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5FFavg[2,3],y=wd5FFavg[2,2],xend=wd5FFavg[2,4],yend=wd5FFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5FFavg[3,3],y=wd5FFavg[3,2],xend=wd5FFavg[3,4],yend=wd5FFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5FFavg[4,3],y=wd5FFavg[4,2],xend=wd5FFavg[4,4],yend=wd5FFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5FFavg[5,3],y=wd5FFavg[5,2],xend=wd5FFavg[5,4],yend=wd5FFavg[5,2]),color="blue",linewidth=1.2)
+
+#Y Residues
+wd5YFavg=as.data.frame(filter(WYFLwd5Counts,binary_stop=="live")%>%group_by(Ysum)%>%summarise(mean(SlopeNorm2ptSD2)))
+wd5YFavg$low=wd5YFavg$Ysum+0.7
+wd5YFavg$high=wd5YFavg$Ysum+1.3
+
+ggplot(WYFLwd5Counts[WYFLwd5Counts$Ysum<5,],aes(x=as.factor(Ysum),y=SlopeNorm2ptSD2))+
+  geom_violin(scale = "count")+
+  geom_dotplot(binwidth = 0.05,binaxis = "y", stackdir = "center")+
+  theme_classic()+
+  labs(title="WYFL wd5 Y residues")+
+  xlab("Number of Residues")+
+  ylab("Slope")+
+  theme(axis.text = element_text(size=12))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_segment(aes(x=wd5YFavg[1,3],y=wd5YFavg[1,2],xend=wd5YFavg[1,4],yend=wd5YFavg[1,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5YFavg[2,3],y=wd5YFavg[2,2],xend=wd5YFavg[2,4],yend=wd5YFavg[2,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5YFavg[3,3],y=wd5YFavg[3,2],xend=wd5YFavg[3,4],yend=wd5YFavg[3,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5YFavg[4,3],y=wd5YFavg[4,2],xend=wd5YFavg[4,4],yend=wd5YFavg[4,2]),color="blue",linewidth=1.2)+
+  geom_segment(aes(x=wd5YFavg[5,3],y=wd5YFavg[5,2],xend=wd5YFavg[5,4],yend=wd5YFavg[5,2]),color="blue",linewidth=1.2)
+
+```
+
+```{r Per Residue Combined Boxplots}
+#W residues
+ggplot(WYFLCounts[WYFLCounts$Wsum<5,],aes(x=as.factor(Wsum),y=SlopeNorm2ptSD2,fill=factor(Group,levels=c("ex","col","wd5"))))+
+  geom_boxplot(alpha=0.8,linewidth=1,outlier.color = NA,position = position_dodge(width = 0.9))+
+  geom_point(size=0.5,position = position_jitterdodge(jitter.width = 0.3,dodge.width = 0.9))+
+  geom_point(size=2,aes(x=as.factor(Wsum),y=SlopeNorm2ptSD2,color=factor(Group,levels=c("ex","col","wd5"))),data = WYFLCounts[WYFLCounts$Wsum==5,],position = position_dodge(width = 0.9))+
+  scale_fill_manual(values = c("darkred","navy","darkgoldenrod2"),limits=c("ex","col","wd5"),breaks=c("ex","col","wd5"),name="Sequence",labels=c("Flanked","Intermixed","Amphipathic"))+
+  scale_color_manual(values = c("darkred","navy","darkgoldenrod2"),limits=c("ex","col","wd5"),breaks=c("ex","col","wd5"),name="Template",labels=c("Flanked","Intermixed","Amphipathic"))+
+  theme_classic()+
+  #labs(title="WYFL W residues")+
+  xlab("Number of W Residues")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        legend.text = element_text(size=12,color="black"),
+        legend.title = element_text(size=14,face = "bold",color="black"),
+        legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+#L residues
+ggplot(WYFLCounts[WYFLCounts$Lsum<5,],aes(x=as.factor(Lsum),y=SlopeNorm2ptSD2,fill=factor(Group,levels=c("ex","col","wd5"))))+
+  geom_boxplot(alpha=0.8,linewidth=1,outlier.color = NA,position = position_dodge(width = 0.9))+
+  geom_point(size=0.5,position = position_jitterdodge(jitter.width = 0.3,dodge.width = 0.9))+
+    geom_point(size=2,aes(x=as.factor(Lsum),y=SlopeNorm2ptSD2,color=factor(Group,levels=c("ex","col","wd5"))),data = WYFLCounts[WYFLCounts$Lsum==5,],position = position_dodge(width = 0.9))+
+  scale_fill_manual(values = c("darkred","navy","darkgoldenrod2"),limits=c("ex","col","wd5"),breaks=c("ex","col","wd5"),name="Sequence",labels=c("Flanked","Intermixed","Amphipathic"))+  
+  scale_color_manual(values = c("darkred","navy","darkgoldenrod2"),limits=c("ex","col","wd5"),breaks=c("ex","col","wd5"),name="Sequence",labels=c("Flanked","Intermixed","Amphipathic"))+
+  theme_classic()+
+  #labs(title="WYFL L residues")+
+  xlab("Number of L Residues")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        legend.text = element_text(size=12,color="black"),
+        legend.title = element_text(size=14,face = "bold",color="black"),
+        legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+#F residues
+ggplot(WYFLCounts[WYFLCounts$Fsum<5,],aes(x=as.factor(Fsum),y=SlopeNorm2ptSD2,fill=factor(Group,levels=c("ex","col","wd5"))))+
+  geom_boxplot(alpha=0.8,linewidth=1,outlier.color = NA,position = position_dodge(width = 0.9))+
+  geom_point(size=0.5,position = position_jitterdodge(jitter.width = 0.3,dodge.width = 0.9))+
+    geom_point(size=2,aes(x=as.factor(Fsum),y=SlopeNorm2ptSD2,color=factor(Group,levels=c("ex","col","wd5"))),data = WYFLCounts[WYFLCounts$Fsum==5,],position = position_dodge(width = 0.9))+
+  scale_fill_manual(values = c("darkred","navy","darkgoldenrod2"),limits=c("ex","col","wd5"),breaks=c("ex","col","wd5"),name="Sequence",labels=c("Flanked","Intermixed","Amphipathic"))+
+  scale_color_manual(values = c("darkred","navy","darkgoldenrod2"),limits=c("ex","col","wd5"),breaks=c("ex","col","wd5"),name="Sequence",labels=c("Flanked","Intermixed","Amphipathic"))+
+  theme_classic()+
+  #labs(title="WYFL F residues")+
+  xlab("Number of F Residues")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        legend.text = element_text(size=12,color="black"),
+        legend.title = element_text(size=14,face = "bold",color="black"),
+        legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+#Y residues
+ggplot(WYFLCounts[WYFLCounts$Ysum<5,],aes(x=as.factor(Ysum),y=SlopeNorm2ptSD2,fill=factor(Group,levels=c("ex","col","wd5"))))+
+  geom_boxplot(alpha=0.8,linewidth=1,outlier.color = NA,position = position_dodge(width = 0.9))+
+  geom_point(size=0.5,position = position_jitterdodge(jitter.width = 0.3,dodge.width = 0.9))+
+  geom_point(size=2,aes(x=as.factor(Ysum),y=SlopeNorm2ptSD2,color=factor(Group,levels=c("ex","col","wd5"))),data = WYFLCounts[WYFLCounts$Ysum==5,],position = position_dodge(width = 0.9))+
+  scale_fill_manual(values = c("darkred","navy","darkgoldenrod2"),limits=c("ex","col","wd5"),breaks=c("ex","col","wd5"),name="Sequence",labels=c("Flanked","Intermixed","Amphipathic"))+
+  scale_color_manual(values = c("darkred","navy","darkgoldenrod2"),limits=c("ex","col","wd5"),breaks=c("ex","col","wd5"),name="Sequence",labels=c("Flanked","Intermixed","Amphipathic"))+
+  theme_classic()+
+  #labs(title="WYFL Y residues")+
+  xlab("Number of Y Residues")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        legend.text = element_text(size=12,color="black"),
+        legend.title = element_text(size=14,face = "bold",color="black"),
+        legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+```
+
+## Position Effect
+
+Line graphs of each WYFL set for each residue across all five positions.
+
+```{r Per residue graphs}
+#Extended (Flanked) 47.3 percent functional
+liveSum=colSums(WYFLexfdata[WYFLexfdata$binary_stop=="live",][,-1:-5])
+dieSum=colSums(WYFLexfdata[WYFLexfdata$binary_stop=="die",][,-1:-5])
+livePercent=liveSum/(liveSum+dieSum)*100
+plotWYFLex=tibble(aa = c(rep('W',5),rep('L',5),rep('F',5),rep('Y',5)),
+                  pos = c(1:5,1:5,1:5,1:5), 
+                  check = names(livePercent),
+                  live_percent = livePercent)
+ggplot(plotWYFLex)+
+  geom_smooth(aes(x=pos,y=live_percent,color=aa),se=FALSE,linewidth=2)+
+  scale_x_continuous(breaks = seq(10))+
+  scale_color_manual(values=c("orange2","#f7cb77","yellow2","#cf8902"),limits=c("W","F","L","Y"),breaks=c("W","F","L","Y"),name="Residue")+
+  theme_classic()+
+  #labs(title="WYFL Flanked Percent Functional vs Position")+
+  xlab("Residue Position")+
+  ylab("Percent Functional")+
+  scale_y_continuous(breaks = seq(10,80,10),limits = c(13.2,81.2))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")+
+  geom_hline(yintercept = 47.3,color="black",linewidth=1.2)+
+  geom_text(aes(x=5.4,y=25,label="Y"),size=5)+
+  geom_text(aes(x=5.4,y=44,label="W"),size=5)+
+  geom_text(aes(x=5.4,y=56,label="F"),size=5)+
+  geom_text(aes(x=5.4,y=63,label="L"),size=5)
+
+#Collapsed (Intermixed) 57.4 percent functional
+liveSum=colSums(WYFLcolfdata[WYFLcolfdata$binary_stop=="live",][,-1:-5])
+dieSum=colSums(WYFLcolfdata[WYFLcolfdata$binary_stop=="die",][,-1:-5])
+livePercent=liveSum/(liveSum+dieSum)*100
+plotWYFLcol=tibble(aa = c(rep('W',5),rep('L',5),rep('F',5),rep('Y',5)),
+                  pos = c(1:5,1:5,1:5,1:5), 
+                  check = names(livePercent),
+                  live_percent = livePercent)
+ggplot(plotWYFLcol)+
+  geom_smooth(aes(x=pos,y=live_percent,color=aa),se=FALSE,linewidth=2)+
+  scale_x_continuous(breaks = seq(10))+
+  scale_color_manual(values=c("orange2","#f7cb77","yellow2","#cf8902"),limits=c("W","F","L","Y"),breaks=c("W","F","L","Y"),name="Residue")+
+  theme_classic()+
+  #labs(title="WYFL Intermixed Percent Functional vs Position")+
+  xlab("Residue Position")+
+  ylab("Percent Functional")+
+  scale_y_continuous(breaks = seq(0,90,10),limits = c(16.4,98.4))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")+
+  geom_hline(yintercept = 57.4,color="black",linewidth=1.2)+
+  geom_text(aes(x=5.4,y=37,label="Y"),size=5)+
+  geom_text(aes(x=5.4,y=63,label="W"),size=5)+
+  geom_text(aes(x=5.4,y=73,label="F"),size=5)+
+  geom_text(aes(x=5.4,y=54,label="L"),size=5)
+
+
+#wd5 (Amphipathic Helix) 16.2 percent functional
+liveSum=colSums(WYFLwd5fdata[WYFLwd5fdata$binary_stop=="live",][,-1:-5])
+dieSum=colSums(WYFLwd5fdata[WYFLwd5fdata$binary_stop=="die",][,-1:-5])
+livePercent=liveSum/(liveSum+dieSum)*100
+plotWYFLwd5=tibble(aa = c(rep('W',5),rep('L',5),rep('F',5),rep('Y',5)),
+                  pos = c(1:5,1:5,1:5,1:5), 
+                  check = names(livePercent),
+                  live_percent = livePercent)
+ggplot(plotWYFLwd5)+
+  geom_smooth(aes(x=pos,y=live_percent,color=aa),se=FALSE,linewidth=2)+
+  scale_x_continuous(breaks = seq(10))+
+  scale_color_manual(values=c("orange2","#f7cb77","yellow2","#cf8902"),limits=c("W","F","L","Y"),breaks=c("W","F","L","Y"),name="Residue")+
+  theme_classic()+
+  #labs(title="WYFL wd5 Percent Functional vs Position")+
+  xlab("Residue Position")+
+  ylab("Percent Functional")+
+  scale_y_continuous(breaks = seq(0,40,10),limits = c(-3.8,36.2))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold"),legend.position = "none")+
+  geom_hline(yintercept = 16.2,color="black",linewidth=1.2)+
+  geom_text(aes(x=5.4,y=2,label="Y"),size=5)+
+  geom_text(aes(x=5.4,y=36,label="W"),size=5)+
+  geom_text(aes(x=5.4,y=21,label="F"),size=5)+
+  geom_text(aes(x=5.4,y=10,label="L"),size=5)
+
+```
+
+```{r Per Residue regression}
+#Extended (Flanked) - 20 Features
+#ML Regression
+print("Average average area under the curve for Extended WYFL using 20 Features")
+run_5ml(WYFLexfdata%>%dplyr::select('binary_stop',starts_with("W"),starts_with("L"),starts_with("F"),starts_with("Y")), my_lambda = 10^seq(-9,-3,length = 50)) %>% mean()
+#Linear Regression
+Fit=glm(binary_stop=="live"~.,WYFLexfdata[,c(5,11:25)],family=binomial)
+Fit2=lm(SlopeNorm2ptSD2~.,WYFLexfdata[,c(4,11:25)])
+summary(Fit)
+summary(Fit2)
+#Extended - 5 Features 
+#ML Regression
+print("Average average area under the curve for Extended WYFL using 5 Features")
+run_5ml(WYFLexCounts%>%dplyr::select('binary_stop',starts_with("W"),starts_with("L"),starts_with("F"),starts_with("Y")), my_lambda = 10^seq(-9,-3,length = 50)) %>% mean()
+#Linear Regression
+Fit=glm(binary_stop=="live"~.,WYFLexCounts[,c(5,7,8,9)],family=binomial)
+Fit2=lm(SlopeNorm2ptSD2~.,WYFLexCounts[,c(4,7,8,9)])
+summary(Fit)
+summary(Fit2)
+
+#Collapsed (Intermixed) - 20 Features
+#ML Regression
+print("Average average area under the curve for Collapsed WYFL using 20 Features")
+run_5ml(WYFLcolfdata%>%dplyr::select('binary_stop',starts_with("W"),starts_with("L"),starts_with("F"),starts_with("Y")), my_lambda = 10^seq(-9,-3,length = 50)) %>% mean()
+#Linear Regression
+Fit=glm(binary_stop=="live"~.,WYFLcolfdata[,c(5,11:25)],family=binomial)
+Fit2=lm(SlopeNorm2ptSD2~.,WYFLcolfdata[,c(4,11:25)])
+summary(Fit)
+summary(Fit2)
+#Extended - 5 Features 
+#ML Regression
+print("Average average area under the curve for Collapsed WYFL using 5 Features")
+run_5ml(WYFLcolCounts%>%dplyr::select('binary_stop',starts_with("W"),starts_with("L"),starts_with("F"),starts_with("Y")), my_lambda = 10^seq(-9,-3,length = 50)) %>% mean()
+#Linear Regression
+Fit=glm(binary_stop=="live"~.,WYFLcolCounts[,c(5,7,8,9)],family=binomial)
+Fit2=lm(SlopeNorm2ptSD2~.,WYFLcolCounts[,c(4,7,8,9)])
+summary(Fit)
+summary(Fit2)
+
+#wd5 - 20 Features
+#ML Regression
+print("Average average area under the curve for wd5 WYFL using 20 Features")
+run_5ml(WYFLwd5fdata%>%dplyr::select('binary_stop',starts_with("W"),starts_with("L"),starts_with("F"),starts_with("Y")), my_lambda = 10^seq(-9,-3,length = 50)) %>% mean()
+#Linear Regression
+Fit=glm(binary_stop=="live"~.,WYFLwd5fdata[,c(5,11:25)],family=binomial)
+Fit2=lm(SlopeNorm2ptSD2~.,WYFLwd5fdata[,c(4,11:25)])
+summary(Fit)
+summary(Fit2)
+#Extended - 5 Features 
+#ML Regression
+print("Average average area under the curve for wd5 WYFL using 5 Features")
+run_5ml(WYFLwd5Counts%>%dplyr::select('binary_stop',starts_with("W"),starts_with("L"),starts_with("F"),starts_with("Y")), my_lambda = 10^seq(-9,-3,length = 50)) %>% mean()
+#Linear Regression
+Fit=glm(binary_stop=="live"~.,WYFLwd5Counts[,c(5,7,8,9)],family=binomial)
+Fit2=lm(SlopeNorm2ptSD2~.,WYFLwd5Counts[,c(4,7,8,9)])
+summary(Fit)
+summary(Fit2)
+
+```
+
+## Subset WYFL Sequences
+
+To export WYFL sequences based on slope and composition.
+
+```{r WYFL Composition Subsets}
+#Composition Group Tables
+#Extended (flanked)
+WYFLexCounts$CompGroup=paste("W",WYFLexCounts$Wsum,"L",WYFLexCounts$Lsum,"F",WYFLexCounts$Fsum,"Y",WYFLexCounts$Ysum,sep = "")
+WYFLexComps=group_by(WYFLexCounts,CompGroup)%>%summarise(FunctionalPercent=mean(SlopeNorm2ptSD2>0)*100,AvgSlope=mean(SlopeNorm2ptSD2),Number=n())
+
+#Collapsed (intermixed)
+WYFLcolCounts$CompGroup=paste("W",WYFLcolCounts$Wsum,"L",WYFLcolCounts$Lsum,"F",WYFLcolCounts$Fsum,"Y",WYFLcolCounts$Ysum,sep = "")
+WYFLcolComps=group_by(WYFLcolCounts,CompGroup)%>%summarise(FunctionalPercent=mean(SlopeNorm2ptSD2>0)*100,AvgSlope=mean(SlopeNorm2ptSD2),Number=n())
+
+#wd5 (amphipathic helix)
+WYFLwd5Counts$CompGroup=paste("W",WYFLwd5Counts$Wsum,"L",WYFLwd5Counts$Lsum,"F",WYFLwd5Counts$Fsum,"Y",WYFLwd5Counts$Ysum,sep = "")
+WYFLwd5Comps=group_by(WYFLwd5Counts,CompGroup)%>%summarise(FunctionalPercent=mean(SlopeNorm2ptSD2>0)*100,AvgSlope=mean(SlopeNorm2ptSD2),Number=n())
+
+#Specific Defined Compositions
+#Extended (flanked)
+W3L1F1=WYFLexCounts%>%filter(Wsum==3,Lsum==1,Fsum==1)%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+W2L2F1=WYFLexCounts%>%filter(Wsum==2,Lsum==2,Fsum==1)%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+W2L1F2=WYFLexCounts%>%filter(Wsum==2,Lsum==1,Fsum==2)%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+W2L1F1Y1=WYFLexCounts%>%filter(Wsum==2,Lsum==1,Fsum==1,Ysum==1)%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+
+#Collapsed (intermixed)
+cW3L1F1=WYFLcolCounts%>%filter(Wsum==3,Lsum==1,Fsum==1)%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+cW2L2F1=WYFLcolCounts%>%filter(Wsum==2,Lsum==2,Fsum==1)%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+cW2L1F2=WYFLcolCounts%>%filter(Wsum==2,Lsum==1,Fsum==2)%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+cW2L1F1Y1=WYFLcolCounts%>%filter(Wsum==2,Lsum==1,Fsum==1,Ysum==1)%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+
+#wd5 (amphipathic helix)
+dW3L1F1=WYFLwd5Counts%>%filter(Wsum==3,Lsum==1,Fsum==1)%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+dW2L2F1=WYFLwd5Counts%>%filter(Wsum==2,Lsum==2,Fsum==1)%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+dW2L1F2=WYFLwd5Counts%>%filter(Wsum==2,Lsum==1,Fsum==2)%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+dW2L1F1Y1=WYFLwd5Counts%>%filter(Wsum==2,Lsum==1,Fsum==1,Ysum==1)%>%dplyr::select(id_number,aa_seq,extra,SlopeNorm2ptSD2)
+
+```
+
+## Sequence Logos
+
+Proportion of each residue at each position within WYFL set sequences.
+
+```{r Sequence Logos}
+#Color scheme for sequence logos
+cs1 = make_col_scheme(chars=c('W', 'F', 'L', 'Y', 'D', 'G'), 
+                      groups=c('W', 'F', 'L', 'Y', 'D', 'G'), 
+                      cols=c("orange2","#f7cb77","#d6cf00","#cf8902",alpha("red2",0.6),"pink2"))
+cs2 = make_col_scheme(chars=c('W', 'F', 'L', 'Y', 'D', 'G'), 
+                      groups=c('W', 'F', 'L', 'Y', 'D', 'G'), 
+                      cols=c("red","blue","yellow","black","grey80","grey80"))
+
+#Flanked
+#Top 5% (n=56)
+ggseqlogo(str_sub(WYFLexfdata[WYFLexfdata$SlopeNorm2ptSD2>4.7,]$aa_seq,11,20), col_scheme=cs2,method="prob",color="black",linewidth=0.05)
+#All Functional (n=490)
+ggseqlogo(str_sub(WYFLexfdata[WYFLexfdata$SlopeNorm2ptSD2>0,]$aa_seq,11,20), col_scheme=cs2,method="prob",color="black",linewidth=0.05)
+#Bottom 5% (n=60)
+ggseqlogo(str_sub(WYFLexfdata[WYFLexfdata$SlopeNorm2ptSD2<(-1.9),]$aa_seq,11,20), col_scheme=cs2,method="prob",color="black",linewidth=0.05)
+
+#Intermixed
+#Top 5% (n=52)
+ggseqlogo(str_sub(WYFLcolfdata[WYFLcolfdata$SlopeNorm2ptSD2>3.1,]$aa_seq,11,20), col_scheme=cs2,method="prob",color="black",linewidth=0.05)
+#All Functional (n=587)
+ggseqlogo(str_sub(WYFLcolfdata[WYFLcolfdata$SlopeNorm2ptSD2>0,]$aa_seq,11,20), col_scheme=cs2,method="prob",color="black",linewidth=0.05)
+#Bottom 5% (n=53)
+ggseqlogo(str_sub(WYFLcolfdata[WYFLcolfdata$SlopeNorm2ptSD2<(-1.75),]$aa_seq,11,20), col_scheme=cs2,method="prob",color="black",linewidth=0.05)
+
+#Amphipathic helix
+#Top 5% (n=54)
+ggseqlogo(WYFLwd5fdata[WYFLwd5fdata$SlopeNorm2ptSD2>0.67,]$aa_seq, col_scheme=cs2,method="prob",color="black",linewidth=0.05)+
+  scale_x_continuous(breaks=seq(1,19,2))
+#All Functional (n=166)
+ggseqlogo(WYFLwd5fdata[WYFLwd5fdata$SlopeNorm2ptSD2>0,]$aa_seq, col_scheme=cs2,method="prob",color="black",linewidth=0.05)+
+  scale_x_continuous(breaks=seq(1,19,2))
+#Bottom 5% (n=57)
+ggseqlogo(WYFLwd5fdata[WYFLwd5fdata$SlopeNorm2ptSD2<(-1.8),]$aa_seq, col_scheme=cs2,method="prob",color="black",linewidth=0.05)+
+  scale_x_continuous(breaks=seq(1,19,2))
+
+```
+
+## MEME Input
+
+Preparing FASTA formatted files to use as an input for MEME motif search. 
+
+```{r Make Fasta for MEME}
+#Flanked
+#Top 50
+Flankedtop50=gsub("G","",arrange(WYFLexfdata,desc(SlopeNorm2ptSD2))[1:50,]$aa_seq)
+names(Flankedtop50)=arrange(WYFLexfdata,desc(SlopeNorm2ptSD2))[1:50,]$id_number
+MakeFasta(Flankedtop50,"Flankedtop50.fasta")
+#All Functional
+FlankedFunctional=gsub("G","",filter(arrange(WYFLexfdata,desc(SlopeNorm2ptSD2)),SlopeNorm2ptSD2>0)$aa_seq)
+names(FlankedFunctional)=filter(arrange(WYFLexfdata,desc(SlopeNorm2ptSD2)),SlopeNorm2ptSD2>0)$id_number
+MakeFasta(FlankedFunctional,"FlankedFunctional.fasta")
+#All Non-functional
+FlankedNon=gsub("G","",filter(arrange(WYFLexfdata,desc(SlopeNorm2ptSD2)),SlopeNorm2ptSD2<=0)$aa_seq)
+names(FlankedNon)=filter(arrange(WYFLexfdata,desc(SlopeNorm2ptSD2)),SlopeNorm2ptSD2<=0)$id_number
+MakeFasta(FlankedNon,"FlankedNon.fasta")
+
+#Intermixed
+#Top 50
+Mixedtop50=gsub("G","",arrange(WYFLcolfdata,desc(SlopeNorm2ptSD2))[1:50,]$aa_seq)
+names(Mixedtop50)=arrange(WYFLcolfdata,desc(SlopeNorm2ptSD2))[1:50,]$id_number
+MakeFasta(Mixedtop50,"Mixedtop50.fasta")
+#All Functional
+MixedFunctional=gsub("G","",filter(arrange(WYFLcolfdata,desc(SlopeNorm2ptSD2)),SlopeNorm2ptSD2>0)$aa_seq)
+names(MixedFunctional)=filter(arrange(WYFLcolfdata,desc(SlopeNorm2ptSD2)),SlopeNorm2ptSD2>0)$id_number
+MakeFasta(MixedFunctional,"MixedFunctional.fasta")
+#All Non-functional
+MixedNon=gsub("G","",filter(arrange(WYFLcolfdata,desc(SlopeNorm2ptSD2)),SlopeNorm2ptSD2<=0)$aa_seq)
+names(MixedNon)=filter(arrange(WYFLcolfdata,desc(SlopeNorm2ptSD2)),SlopeNorm2ptSD2<=0)$id_number
+MakeFasta(MixedNon,"MixedNon.fasta")
+
+#Amphipathic Helix
+#Top 50
+wd5top50=gsub("G","",arrange(WYFLwd5fdata,desc(SlopeNorm2ptSD2))[1:50,]$aa_seq)
+names(wd5top50)=arrange(WYFLwd5fdata,desc(SlopeNorm2ptSD2))[1:50,]$id_number
+MakeFasta(wd5top50,"wd5top50.fasta")
+#All Functional
+wd5Functional=gsub("G","",filter(arrange(WYFLwd5fdata,desc(SlopeNorm2ptSD2)),SlopeNorm2ptSD2>0)$aa_seq)
+names(wd5Functional)=filter(arrange(WYFLwd5fdata,desc(SlopeNorm2ptSD2)),SlopeNorm2ptSD2>0)$id_number
+MakeFasta(wd5Functional,"wd5Functional.fasta")
+#All Non-functional
+wd5Non=gsub("G","",filter(arrange(WYFLwd5fdata,desc(SlopeNorm2ptSD2)),SlopeNorm2ptSD2<=0)$aa_seq)
+names(wd5Non)=filter(arrange(WYFLwd5fdata,desc(SlopeNorm2ptSD2)),SlopeNorm2ptSD2<=0)$id_number
+MakeFasta(wd5Non,"wd5Non.fasta")
+
+```

@@ -1,0 +1,111 @@
+---
+title: "BasicResidues-Analysis"
+author: "David Cooper"
+date: "2023-03-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(RColorBrewer)
+library(pheatmap)
+library(limma)
+library(Biobase)
+library(MASS)
+library(caret)
+library(pROC)
+library(stringr)
+source("ProcessingFunctions.R")
+
+```
+
+## Basic Residues
+
+Does increasing number of R residues result in decreased function?
+How does the position of R residues influence function?
+
+```{r Load and Prep Data}
+FilteredEset=readRDS("STARFilteredNormalizedEset.rds")
+BasicsEset=FilteredEset[FilteredEset@featureData@data$set=="basic_positions",]
+
+#Basic Residue Position
+MeanBasicPos=sapply(gsub("DDDWWWWWDD","",BasicsEset@featureData@data$aa_seq),ResidueLocation,AA="R")
+fData(BasicsEset)$MeanBasicPosition=MeanBasicPos
+
+#2R Spacing N-cluster, Spaced, and C-cluster groups
+Group2REset=BasicsEset[BasicsEset@featureData@data$extra=="2R",]
+Groups2R=sapply(Group2REset@featureData@data$aa_seq,SpacingGroup,AA="R",ResidueNumber=2)
+fData(Group2REset)$Groups=factor(Groups2R,levels = c("N_cluster","C_cluster","Spaced"))
+
+#3R Spacing and clustering
+Group3REset=BasicsEset[BasicsEset@featureData@data$extra=="3R",]
+Groups3R=sapply(Group3REset@featureData@data$aa_seq,SpacingGroup,AA="R",ResidueNumber=3)
+fData(Group3REset)$Groups=factor(Groups3R,levels = c("N_cluster","C_cluster","Spaced"))
+
+```
+
+```{r Distribution of Functionality}
+ggplot(BasicsEset[BasicsEset@featureData@data$extra!="0R"]@featureData@data,aes(x=factor(extra, levels=c("1R","2R","3R")),y=SlopeNorm2ptSD2,fill=extra))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+  
+  geom_boxplot(linewidth=1,outlier.color = NA)+
+  geom_jitter(width = 0.3,height = 0)+
+  geom_point(size=3,aes(x=factor(extra),y=SlopeNorm2ptSD2),data = BasicsEset[BasicsEset@featureData@data$extra=="0R"]@featureData@data)+
+  scale_fill_manual(values = brewer.pal(name="Blues",n=8)[c(4,6,8)],limits=c("1R","2R","3R"),breaks=c("1R","2R","3R"),name="R Residues ",labels=c("1","2","3"))+
+  theme_classic()+
+  #labs(title="Number of Arginine Residues")+
+  xlab("Number of R Residues")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("0R","1R","2R","3R"),labels=c("0","1","2","3"))+
+  scale_y_continuous(breaks = seq(-3,5,2),limits = c(-3,5))+
+  theme(axis.text = element_text(size=14,face = "bold",color = "black"),axis.title=element_text(size=16,face="bold",color="black"),legend.position = "none")
+
+BasicsForCor=data.frame(Slope=BasicsEset@featureData@data$SlopeNorm2ptSD2,Count=as.numeric(gsub("R","",BasicsEset@featureData@data$extra)))
+cor(BasicsForCor$Slope,BasicsForCor$Count,method = "spearman")
+
+```
+
+```{r Function per Average Position}
+BasicsEset[BasicsEset@featureData@data$extra!="0R",]@featureData@data%>%
+ggplot()+
+  geom_point(aes(MeanBasicPosition,SlopeNorm2ptSD2,color=extra),size=3)+
+  geom_smooth(aes(MeanBasicPosition,SlopeNorm2ptSD2,color=extra,fill=extra),method = lm,se = TRUE,formula = y~x)+  
+  theme_classic()+
+  scale_color_manual(values = brewer.pal(name="Blues",n=8)[c(4,6,8)],limits=c("1R","2R","3R"),breaks=c("1R","2R","3R"),name="Number of\nR Residues ",labels=c("1","2","3"))+
+  scale_fill_manual(values = brewer.pal(name="Blues",n=8)[c(4,6,8)],limits=c("1R","2R","3R"),breaks=c("1R","2R","3R"),name="Number of\nR Residues ",labels=c("1","2","3"))+
+  #scale_shape_manual(values = c(15,16,17),limits=c("1R","2R","3R"),breaks=c("1R","2R","3R"),name="Number of\nR Residues ",labels=c("1","2","3"))+
+  #labs(title="Average Position of R Residues")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_vline(xintercept = 5.5,color="black",linewidth=1.2)+
+  xlab("Average Position of R Residues")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,5,2),limits = c(-3,5))+
+  scale_x_continuous(breaks=seq(1,10,1),labels = c(1:5,16:20))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position=c(0.12,0.85))
+
+```
+
+```{r Function per Average Position LM}
+LM1R=lm(SlopeNorm2ptSD2~MeanBasicPosition,BasicsEset[BasicsEset@featureData@data$extra=="1R",]@featureData@data)
+summary(LM1R)
+LM2R=lm(SlopeNorm2ptSD2~MeanBasicPosition,BasicsEset[BasicsEset@featureData@data$extra=="2R",]@featureData@data)
+summary(LM2R)
+LM3R=lm(SlopeNorm2ptSD2~MeanBasicPosition,BasicsEset[BasicsEset@featureData@data$extra=="3R",]@featureData@data)
+summary(LM3R)
+
+```
+
+``` {r Clustering and Spacing}
+ggplot(Group2REset@featureData@data,aes(x=Groups,y=SlopeNorm2ptSD2))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+  
+  geom_boxplot(linewidth=1,outlier.color = NA,fill="#4292C6")+
+  geom_jitter(width = 0.3,height = 0)+
+  theme_classic()+
+  #labs(title="Spaced vs Clustered: Group 2R")+
+  xlab("")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("N_cluster","C_cluster","Spaced"),labels=c("N-Cluster","C-Cluster","Spaced"))+
+  scale_y_continuous(breaks = seq(-3,5,2),limits = c(-3,5))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.position="none")
+
+```

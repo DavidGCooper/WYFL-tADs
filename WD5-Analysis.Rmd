@@ -1,0 +1,132 @@
+---
+title: "WD5-Analysis"
+author: "David Cooper"
+date: "2023-03-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggrepel)
+library(RColorBrewer)
+library(pheatmap)
+library(limma)
+library(Biobase)
+library(MASS)
+library(caret)
+library(pROC)
+library(stringr)
+source("ProcessingFunctions.R")
+
+```
+
+## WD5 Prolines
+
+The WD5 template is an amphipathic helix template (WGDGWGDGWGDGWGDGWGDG)
+
+Does increasing number of P residues result in increased function?
+How does the position of P residues influence function?
+
+```{r Load and Prep Data}
+FilteredEset=readRDS("STARFilteredNormalizedEset.rds")
+WD5Eset=FilteredEset[substr(FilteredEset@featureData@data$set,1,3)=="WD5"|FilteredEset@featureData@data$id_number==8292,]
+
+WD5proEset=FilteredEset[FilteredEset@featureData@data$set=="WD5_proline"|FilteredEset@featureData@data$id_number %in% c(8292,10112),]
+WD5proEset@featureData@data[WD5proEset@featureData@data$id_number==8292,]$extra="0P"
+WD5proEset@featureData@data[WD5proEset@featureData@data$id_number==10112,]$extra="10P"
+
+WD5profdata=WD5proEset@featureData@data
+
+#Proline Residue Position
+MeanProlinePos=sapply(WD5profdata$aa_seq,ResidueLocation,AA="P")
+WD5profdata$MeanProlinePosition=MeanProlinePos
+
+WD5AA=FilteredEset[FilteredEset@featureData@data$set=="WD5_investigations"|FilteredEset@featureData@data$id_number==8292,]@featureData@data
+WD5AA$Residue=substr(WD5AA$aa_seq,2,2)
+
+#Prep Agadir helix table
+Agadir=readRDS("agadir_scores.rds")
+
+WD5AA$Agadir=Agadir$agadir_score[match(WD5AA$id_number,Agadir$ID)]
+
+```
+
+```{r Distribution of Functionality}
+ggplot(WD5profdata[WD5profdata$extra!="0P"&WD5profdata$extra!="10P",],aes(x=factor(extra,levels = c("1P","2P","3P")),y=SlopeNorm2ptSD2,fill=factor(extra,levels = c("1P","2P","3P"))))+
+  geom_boxplot(linewidth=1,outlier.color = NA)+
+  geom_jitter(width = 0.3,height = 0)+
+  geom_point(size=3,aes(x=factor(extra,levels=c("0P","10P")),y=SlopeNorm2ptSD2,color=factor(extra,levels=c("0P","10P"))),data = WD5profdata[WD5profdata$extra=="0P"|WD5profdata$extra=="10P",])+
+  scale_fill_manual(values = brewer.pal(name="PuRd",n=9)[c(4,6,8)],limits=c("1P","2P","3P"),breaks=c("1P","2P","3P"),name="P Residues ",labels=c("1","2","3"))+
+  scale_color_manual(values = brewer.pal(name="PuRd",n=9)[c(3,9)],limits=c("0P","10P"),breaks=c("0P","10P"),name="P Residues ",labels=c("0","10"))+ 
+  theme_classic()+
+  #labs(title="WD5 proline set")+
+  xlab("Number of Proline Residues")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("0P","1P","2P","3P","10P"),labels=c("0","1","2","3","10"))+
+  scale_y_continuous(breaks = seq(0,6,2),limits = c(0,6))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+#Spearman correlation
+ProForCor=data.frame(Slope=WD5profdata$SlopeNorm2ptSD2,Count=as.numeric(gsub("P","",WD5profdata$extra)))
+cor(ProForCor$Slope,ProForCor$Count,method = "spearman")
+
+```
+
+```{r Position of Proline Effect}
+ggplot(WD5profdata[WD5profdata$extra %in% c("1P","2P","3P"),])+
+  geom_point(aes(MeanProlinePosition,SlopeNorm2ptSD2,color=extra),size=3)+
+  geom_smooth(aes(MeanProlinePosition,SlopeNorm2ptSD2,color=extra,fill=extra),method = lm,se = TRUE,formula = y~x)+
+  theme_classic()+
+  scale_color_manual(values = brewer.pal(name="PuRd",n=8)[c(4,6,8)],limits=c("1P","2P","3P"),breaks=c("1P","2P","3P"),name="Number of\nP Residues",labels=c("1","2","3"))+
+  scale_fill_manual(values = brewer.pal(name="PuRd",n=8)[c(4,6,8)],limits=c("1P","2P","3P"),breaks=c("1P","2P","3P"),name="Number of\nP Residues",labels=c("1","2","3"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  scale_x_continuous(breaks = seq(20))+
+  xlab("Average Position of Proline Residues")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(0,6,2),limits = c(0,6))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.title = element_text(size=14,face = "bold"),legend.text = element_text(size=12),legend.position=c(0.9,0.85))
+
+```
+
+```{r Function per Average Position LM}
+LM1P=lm(SlopeNorm2ptSD2~MeanProlinePosition,WD5profdata[WD5profdata$extra=="1P",])
+summary(LM1P)
+LM2P=lm(SlopeNorm2ptSD2~MeanProlinePosition,WD5profdata[WD5profdata$extra=="2P",])
+summary(LM2P)
+LM3P=lm(SlopeNorm2ptSD2~MeanProlinePosition,WD5profdata[WD5profdata$extra=="3P",])
+summary(LM3P)
+
+```
+
+```{r Individual AA Effect}
+ggplot(WD5AA,aes(x=Residue,y=SlopeNorm2ptSD2,fill=Residue))+
+  geom_col(color="black")+
+  theme_classic()+
+  #labs(title="WXDXWXDXWXDXWXDXWXDX Amino Acid Substitutions")+
+  xlab("Amphipathic Helix Template Residue")+
+  ylab("Slope")+
+  scale_x_discrete(limits=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","C","G","P"))+
+  scale_fill_manual(values=c(rep("yellow2",5),rep("orange2",3),rep("green2",4),rep("red2",2),rep("blue",2),rep("pink2",3)),limits=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","C","G","P"),breaks =c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","C","G","P") ) +
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+```
+
+```{r Helix Scatter}
+ggplot(WD5AA, aes(x=Agadir,y=SlopeNorm2ptSD2,color=Residue,label=Residue))+
+  geom_point(size=4)+
+  theme_classic()+
+  #labs(title="Agadir Helicity Prediction")+
+  xlab("Helicity Probability (Agadir, %)")+
+  ylab("Slope")+
+  scale_color_manual(values=c(rep("#d6cf00",5),rep("orange2",3),rep("green2",4),rep("red2",2),rep("blue",2),rep("pink2",3)),limits=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","C","G","P"),breaks =c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","C","G","P") ) +
+  scale_y_continuous(breaks = seq(-3,7,2),limits = c(-3,7))+
+  scale_x_continuous(breaks = seq(0,60,20),limits = c(-10,62))+
+  theme(axis.text = element_text(size=14,face = "bold",color="black"),axis.title=element_text(size=16,face="bold",color="black"),legend.position = "none")+
+  geom_hline(yintercept = 0,color="red",linewidth=1)+
+  geom_text_repel(max.overlaps = 20,size=7,box.padding   = 0.5, point.padding = 0.5)
+
+```

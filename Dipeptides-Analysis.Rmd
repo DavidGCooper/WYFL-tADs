@@ -1,0 +1,322 @@
+---
+title: "Dipeptides-Analysis"
+author: "David Cooper"
+date: "2023-03-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(pheatmap)
+library(limma)
+library(Biobase)
+library(MASS)
+library(caret)
+library(pROC)
+library(stringr)
+source("ProcessingFunctions.R")
+
+```
+
+## Dipeptides
+
+Which residues produce functional sequences?
+Effect of repeat length on function?
+
+```{r Load and Prep Data}
+FilteredEset=readRDS("STARFilteredNormalizedEset.rds")
+DipepEset=FilteredEset[FilteredEset@featureData@data$set=="dipeptide_combinations",]
+fData(DipepEset)$extra=factor(DipepEset@featureData@data$extra,levels = c("rep4","rep6","rep8","rep10"))
+
+#Amino Acid Group Order
+OrderedAA=c("A","I","L","M","V","F","W","Y","C","S","T","Q","N","D","E","H","R","K","G","P")
+#Amino Acid Categories
+Hydrophobic=c("A","I","L","M","V")
+Aromatic=c("F","W","Y")
+Polar=c("S","T","Q","N")
+Acidic=c("D","E")
+Basic=c("R","H","K")
+
+#Set with 4 repeats
+Rep4df=data.frame(Pos1=substring(FilteredEset[FilteredEset@featureData@data$extra=="rep4",]@featureData@data$aa_seq,19,19),Pos2=substring(FilteredEset[FilteredEset@featureData@data$extra=="rep4",]@featureData@data$aa_seq,20,20),Slope=FilteredEset[FilteredEset@featureData@data$extra=="rep4"]@featureData@data$SlopeNorm2ptSD2)
+Rep4mat=as.data.frame(pivot_wider(Rep4df,names_from = Pos2,values_from = Slope))
+rownames(Rep4mat)=Rep4mat$Pos1
+Rep4mat=Rep4mat[OrderedAA,OrderedAA]
+
+#Set with 6 repeats
+Rep6df=data.frame(Pos1=substring(FilteredEset[FilteredEset@featureData@data$extra=="rep6",]@featureData@data$aa_seq,19,19),Pos2=substring(FilteredEset[FilteredEset@featureData@data$extra=="rep6",]@featureData@data$aa_seq,20,20),Slope=FilteredEset[FilteredEset@featureData@data$extra=="rep6"]@featureData@data$SlopeNorm2ptSD2)
+Rep6mat=as.data.frame(pivot_wider(Rep6df,names_from = Pos2,values_from = Slope))
+rownames(Rep6mat)=Rep6mat$Pos1
+Rep6mat=Rep6mat[OrderedAA,OrderedAA]
+
+#Set with 8 repeats
+Rep8df=data.frame(Pos1=substring(FilteredEset[FilteredEset@featureData@data$extra=="rep8",]@featureData@data$aa_seq,19,19),Pos2=substring(FilteredEset[FilteredEset@featureData@data$extra=="rep8",]@featureData@data$aa_seq,20,20),Slope=FilteredEset[FilteredEset@featureData@data$extra=="rep8"]@featureData@data$SlopeNorm2ptSD2)
+Rep8mat=as.data.frame(pivot_wider(Rep8df,names_from = Pos2,values_from = Slope))
+rownames(Rep8mat)=Rep8mat$Pos1
+Rep8mat=Rep8mat[OrderedAA,OrderedAA]
+
+#Set with 10 repeats
+Rep10df=data.frame(Pos1=substring(FilteredEset[FilteredEset@featureData@data$extra=="rep10",]@featureData@data$aa_seq,19,19),Pos2=substring(FilteredEset[FilteredEset@featureData@data$extra=="rep10",]@featureData@data$aa_seq,20,20),Slope=FilteredEset[FilteredEset@featureData@data$extra=="rep10"]@featureData@data$SlopeNorm2ptSD2)
+Rep10mat=as.data.frame(pivot_wider(Rep10df,names_from = Pos2,values_from = Slope))
+rownames(Rep10mat)=Rep10mat$Pos1
+Rep10mat=Rep10mat[OrderedAA,OrderedAA]
+
+#Combine dipeptide data from across all reps
+Reps4_6=merge(Rep4df,Rep6df,by = c("Pos1","Pos2"),all = TRUE,suffixes = c("Rep4","Rep6"))
+Reps8_10=merge(Rep8df,Rep10df,by = c("Pos1","Pos2"),all = TRUE,suffixes = c("Rep8","Rep10"))
+AllReps=merge(Reps4_6,Reps8_10,by = c("Pos1","Pos2"),all = TRUE)
+AllReps$Dipeptide=paste(AllReps$Pos1,AllReps$Pos2,sep = "")
+AllRepsLong=pivot_longer(AllReps,cols = starts_with("Slope"))
+saveRDS(AllReps,"STARAllRepsTable.rds")
+saveRDS(AllRepsLong,"STARAllRepsLongTable.rds")
+
+#Old dipeptide data
+OldDiPep=read.csv("old_dipep.csv")[,2:4]
+OldDiPepMat=as.data.frame(pivot_wider(OldDiPep,names_from = second_aa,values_from = a_slope))
+rownames(OldDiPepMat)=OldDiPepMat$first_aa
+OldDiPepMat=OldDiPepMat[OrderedAA,OrderedAA]
+
+```
+
+```{r Distribution of Functionality}
+table(DipepEset@featureData@data$extra)
+ggplot(DipepEset@featureData@data,aes(x=extra,y=SlopeNorm2ptSD2,fill=extra))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_boxplot(linewidth=1,outlier.color = NA)+
+  geom_jitter(size=0.7,width = 0.3,height = 0)+
+  scale_fill_brewer(limits=c("rep4","rep6","rep8","rep10"),breaks=c("rep4","rep6","rep8","rep10"),name="Repeats",labels=c("4","6","8","10"))+
+  theme_classic()+
+  theme(legend.position="none")+
+  labs(title="Dipeptides")+
+  xlab("Number of repeats")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  scale_x_discrete(limits=c("rep4","rep6","rep8","rep10"),labels=c("4","6","8","10"))+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),axis.title=element_text(size=16,face="bold"))
+
+```
+
+``` {r Functionality Heatmaps}
+paletteLength=50
+myColor=colorRampPalette(c("navy", "white", "red"))(paletteLength)
+
+#Set with 4 repeats
+myBreaks4=c(seq(min(Rep4mat,na.rm = TRUE), 0, length.out=ceiling(paletteLength/2) + 1),seq(max(Rep4mat,na.rm = TRUE)/paletteLength, max(Rep4mat,na.rm = TRUE), length.out=floor(paletteLength/2)))
+pheatmap(Rep4mat,fontsize = 14,angle_col = 0,na_col = "black",main="Dipeptides rep4",cluster_rows = FALSE,cluster_cols = FALSE,color=myColor, breaks=myBreaks4)
+pheatmap(Rep4mat,fontsize = 14,angle_col = 0,na_col = "black",main="Dipeptides rep4",cluster_rows = FALSE,cluster_cols = FALSE,color=c("lightblue","darkorange"),breaks = c(min(Rep4mat,na.rm = TRUE),0,max(Rep4mat,na.rm = TRUE)))
+
+#Set with 6 repeats
+myBreaks6=c(seq(min(Rep6mat,na.rm = TRUE), 0, length.out=ceiling(paletteLength/2) + 1),seq(max(Rep6mat,na.rm = TRUE)/paletteLength, max(Rep6mat,na.rm = TRUE), length.out=floor(paletteLength/2)))
+pheatmap(Rep6mat,fontsize = 14,angle_col = 0,na_col = "black",main="Dipeptides rep6",cluster_rows = FALSE,cluster_cols = FALSE,color=myColor, breaks=myBreaks6)
+pheatmap(Rep6mat,fontsize = 14,angle_col = 0,na_col = "black",main="Dipeptides rep6",cluster_rows = FALSE,cluster_cols = FALSE,color=c("lightblue","darkorange"),breaks = c(min(Rep6mat,na.rm = TRUE),0,max(Rep6mat,na.rm = TRUE)))
+
+#Set with 8 repeats
+myBreaks8=c(seq(min(Rep8mat,na.rm = TRUE), 0, length.out=ceiling(paletteLength/2) + 1),seq(max(Rep8mat,na.rm = TRUE)/paletteLength, max(Rep8mat,na.rm = TRUE), length.out=floor(paletteLength/2)))
+pheatmap(Rep8mat,fontsize = 14,angle_col = 0,na_col = "black",main="Dipeptides rep8",cluster_rows = FALSE,cluster_cols = FALSE,color=myColor, breaks=myBreaks8)
+pheatmap(Rep8mat,fontsize = 14,angle_col = 0,na_col = "black",main="Dipeptides rep8",cluster_rows = FALSE,cluster_cols = FALSE,color=c("lightblue","darkorange"),breaks = c(min(Rep8mat,na.rm = TRUE),0,max(Rep8mat,na.rm = TRUE)))
+
+#Set with 10 repeats
+myBreaks10=c(seq(min(Rep10mat,na.rm = TRUE), 0, length.out=ceiling(paletteLength/2) + 1),seq(max(Rep10mat,na.rm = TRUE)/paletteLength, max(Rep10mat,na.rm = TRUE), length.out=floor(paletteLength/2)))
+pheatmap(Rep10mat,fontsize = 14,angle_col = 0,na_col = "black",main="Dipeptides rep10",cluster_rows = FALSE,cluster_cols = FALSE,color=myColor, breaks=myBreaks10)
+pheatmap(Rep10mat,fontsize = 14,angle_col = 0,na_col = "black",main="Dipeptides rep10",cluster_rows = FALSE,cluster_cols = FALSE,color=c("lightblue","darkorange"),breaks = c(min(Rep10mat,na.rm = TRUE),0,max(Rep10mat,na.rm = TRUE)))
+
+#Old dipeptide data
+myBreaks=c(seq(min(OldDiPepMat,na.rm = TRUE), 0, length.out=ceiling(paletteLength/2) + 1),seq(max(OldDiPepMat,na.rm = TRUE)/paletteLength, max(OldDiPepMat,na.rm = TRUE), length.out=floor(paletteLength/2)))
+pheatmap(OldDiPepMat,fontsize = 14,angle_col = 0,na_col = "black",main="Old Dipeptides rep10",cluster_rows = FALSE,cluster_cols = FALSE,color=myColor, breaks=myBreaks)
+pheatmap(OldDiPepMat,fontsize = 14,angle_col = 0,na_col = "black",main="Old Dipeptides rep10",cluster_rows = FALSE,cluster_cols = FALSE,color=c("lightblue","darkorange"),breaks = c(min(OldDiPepMat,na.rm = TRUE),0,max(OldDiPepMat,na.rm = TRUE)))
+
+```
+
+```{r Functionality per AA category}
+#Boxplots separated by rep number
+filter(AllRepsLong,Pos1%in%Aromatic)%>%
+ggplot(aes(fill=factor(name,levels=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10")),y=value,x=factor(Pos2,levels=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"))))+
+  geom_boxplot()+
+  scale_fill_brewer(limits=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10"),breaks=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10"),name="Repeats",labels=c("4","6","8","10"))+
+  theme_classic()+
+  theme(legend.position="right")+
+  labs(title="Aromatic (W,Y,F) Pos1")+
+  xlab("Residue Pos2")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+filter(AllRepsLong,Pos1%in%Acidic)%>%
+ggplot(aes(fill=factor(name,levels=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10")),y=value,x=factor(Pos2,levels=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"))))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_boxplot()+
+  scale_fill_brewer(limits=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10"),breaks=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10"),name="Repeats",labels=c("4","6","8","10"))+
+  theme_classic()+
+  theme(legend.position=c(0.9,0.85))+
+  labs(title="Acidic (D,E) Pos1")+
+  xlab("Residue Pos2")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),axis.title=element_text(size=16,face="bold"),legend.title = element_text(size=14,face = "bold",colour = "black"),legend.text = element_text(size=12))
+
+filter(AllRepsLong,Pos1%in%Basic)%>%
+ggplot(aes(fill=factor(name,levels=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10")),y=value,x=factor(Pos2,levels=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"))))+
+  geom_boxplot()+
+  scale_fill_brewer(limits=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10"),breaks=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10"),name="Repeats",labels=c("4","6","8","10"))+
+  theme_classic()+
+  theme(legend.position="right")+
+  labs(title="Basic (R,H,K) Pos1")+
+  xlab("Residue Pos2")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+filter(AllRepsLong,Pos1%in%Hydrophobic)%>%
+ggplot(aes(fill=factor(name,levels=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10")),y=value,x=factor(Pos2,levels=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"))))+
+  geom_boxplot()+
+  scale_fill_brewer(limits=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10"),breaks=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10"),name="Repeats",labels=c("4","6","8","10"))+
+  theme_classic()+
+  theme(legend.position="right")+
+  labs(title="Hydrophobic (A,I,L,M,V) Pos1")+
+  xlab("Residue Pos2")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+filter(AllRepsLong,Pos1%in%Polar)%>%
+ggplot(aes(fill=factor(name,levels=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10")),y=value,x=factor(Pos2,levels=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"))))+
+  geom_boxplot()+
+  scale_fill_brewer(limits=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10"),breaks=c("SlopeRep4","SlopeRep6","SlopeRep8","SlopeRep10"),name="Repeats",labels=c("4","6","8","10"))+
+  theme_classic()+
+  theme(legend.position="right")+
+  labs(title="Polar (S,T,Q,N) Pos1")+
+  xlab("Residue Pos2")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+```
+
+```{r Functionality per AA category Combined Reps}
+filter(AllRepsLong,Pos1%in%Aromatic)%>%
+ggplot(aes(y=value,x=factor(Pos2,levels=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P")),fill=Pos2))+
+  geom_boxplot(outlier.color = NA)+
+  geom_jitter(width = 0.2)+
+  scale_fill_manual(values=c(rep("yellow2",5),rep("orange2",3),rep("green2",4),rep("red2",2),rep("blue",3),rep("pink2",3)),limits=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"),breaks =c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P") ) +
+  theme_classic()+
+  theme(legend.position="none")+
+  labs(title="Aromatic (W,Y,F) Pos1")+
+  xlab("Residue Pos2")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+filter(AllRepsLong,Pos1%in%Acidic)%>%
+ggplot(aes(y=value,x=factor(Pos2,levels=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P")),fill=Pos2))+
+  geom_boxplot(outlier.color = NA)+
+  geom_jitter(width = 0.2)+
+  scale_fill_manual(values=c(rep("yellow2",5),rep("orange2",3),rep("green2",4),rep("red2",2),rep("blue",3),rep("pink2",3)),limits=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"),breaks =c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P") ) +
+  theme_classic()+
+  theme(legend.position="none")+
+  labs(title="Acidic (D,E) Pos1")+
+  xlab("Residue Pos2")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+filter(AllRepsLong,Pos1%in%Basic)%>%
+ggplot(aes(y=value,x=factor(Pos2,levels=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P")),fill=Pos2))+
+  geom_boxplot(outlier.color = NA)+
+  geom_jitter(width = 0.2)+
+  scale_fill_manual(values=c(rep("yellow2",5),rep("orange2",3),rep("green2",4),rep("red2",2),rep("blue",3),rep("pink2",3)),limits=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"),breaks =c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P") ) +
+  theme_classic()+
+  theme(legend.position="none")+
+  labs(title="Basic (R,H,K) Pos1")+
+  xlab("Residue Pos2")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+filter(AllRepsLong,Pos1%in%Hydrophobic)%>%
+ggplot(aes(y=value,x=factor(Pos2,levels=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P")),fill=Pos2))+
+  geom_boxplot(outlier.color = NA)+
+  geom_jitter(width = 0.2)+
+  scale_fill_manual(values=c(rep("yellow2",5),rep("orange2",3),rep("green2",4),rep("red2",2),rep("blue",3),rep("pink2",3)),limits=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"),breaks =c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P") ) +
+  theme_classic()+
+  theme(legend.position="none")+
+  labs(title="Hydrophobic (A,I,L,M,V) Pos1")+
+  xlab("Residue Pos2")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+filter(AllRepsLong,Pos1%in%Polar)%>%
+ggplot(aes(y=value,x=factor(Pos2,levels=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P")),fill=Pos2))+
+  geom_boxplot(outlier.color = NA)+
+  geom_jitter(width = 0.2)+
+  scale_fill_manual(values=c(rep("yellow2",5),rep("orange2",3),rep("green2",4),rep("red2",2),rep("blue",3),rep("pink2",3)),limits=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"),breaks =c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P") ) +
+  theme_classic()+
+  theme(legend.position="none")+
+  labs(title="Polar (S,T,Q,N) Pos1")+
+  xlab("Residue Pos2")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+ggplot(AllRepsLong,aes(y=value,x=factor(Pos2,levels=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P")),fill=Pos2))+
+  geom_boxplot(outlier.color = NA)+
+  geom_jitter(width = 0.2)+
+  scale_fill_manual(values=c(rep("yellow2",5),rep("orange2",3),rep("green2",4),rep("red2",2),rep("blue",3),rep("pink2",3)),limits=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"),breaks =c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P") ) +
+  theme_classic()+
+  theme(legend.position="none")+
+  labs(title="Any Residue Pos1")+
+  xlab("Residue Pos2")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+ggplot(AllRepsLong,aes(y=value,x=factor(Pos1,levels=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P")),fill=Pos1))+
+  geom_boxplot(outlier.color = NA)+
+  geom_jitter(width = 0.2)+
+  scale_fill_manual(values=c(rep("yellow2",5),rep("orange2",3),rep("green2",4),rep("red2",2),rep("blue",3),rep("pink2",3)),limits=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"),breaks =c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P") ) +
+  theme_classic()+
+  theme(legend.position="none")+
+  labs(title="Any Residue Pos2")+
+  xlab("Residue Pos1")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),axis.title=element_text(size=16,face="bold"))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)
+
+```
+
+```{r Functionality DX 8reps and 10reps}
+filter(AllRepsLong,Pos1=="D" & name!="SlopeRep4" & name!="SlopeRep6")%>%
+ggplot(aes(y=value,x=factor(Pos2,levels=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P")),fill=factor(Pos2),alpha=factor(name,levels=c("SlopeRep8","SlopeRep10")),linetype=factor(name,levels=c("SlopeRep8","SlopeRep10"))))+
+  geom_hline(yintercept = 0,color="red",linewidth=1.2)+
+  geom_col(position = "dodge2",color="black")+
+  geom_vline(xintercept=seq(1.5, 19.5, 1), lwd=0.25, color="grey50")+
+  theme_classic()+
+  #labs(title="Acidic (D,E) Pos1")+
+  xlab("Second Dipeptide Residue")+
+  ylab("Slope")+
+  scale_y_continuous(breaks = seq(-3,3,2),limits = c(-3.5,3.5))+
+  scale_x_discrete(breaks =c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"),
+                   limits =c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"))+
+  scale_fill_manual(values=c(rep("yellow2",5),rep("orange2",3),rep("green2",4),rep("red2",2),rep("blue",3),rep("pink2",3)),
+                    limits=c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"),
+                    breaks =c("A","I","L","M","V","F","W","Y","S","T","Q","N","D","E","H","R","K","C","G","P"))+
+  scale_linetype_manual(values = c(3,1),name="",labels=c("",""))+
+  scale_alpha_manual(values = c(0.5,1),name="",labels=c("",""))+
+  guides(fill="none")+
+  theme(axis.text = element_text(size=14,face = "bold",colour = "black"),
+        axis.title=element_text(size=16,face="bold"),
+        legend.position=c(0.62,0.87))
+
+```
